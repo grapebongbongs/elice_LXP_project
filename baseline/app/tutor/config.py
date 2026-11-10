@@ -2,7 +2,7 @@
 import os
 
 TOP_K = int(os.getenv("TUTOR_TOP_K", "5"))               # 검색 섹션 수
-SECTION_MAX_CHARS = int(os.getenv("TUTOR_SECTION_CHARS", "2500"))
+SECTION_MAX_CHARS = int(os.getenv("TUTOR_SECTION_CHARS", "3000"))
 REASONING_EFFORT = os.getenv("TUTOR_REASONING_EFFORT", "low")  # minimal|low|medium (생성)
 MAX_TOKENS = int(os.getenv("TUTOR_MAX_TOKENS", "2000"))
 

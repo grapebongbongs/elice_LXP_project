@@ -5,6 +5,7 @@ kb/<과목>/<섹션ID>.md  → 파일명(stem)이 인용할 섹션 ID.
 검색 고도화(임베딩, 청킹 등)는 이 파일 인터페이스(search)를 유지한 채 바꾸면
 튜터·가드 양쪽에 같이 적용된다.
 """
+import csv
 import math
 import re
 from collections import Counter
@@ -49,7 +50,7 @@ class KnowledgeBase:
             print(f"[kb] WARNING: {self.kb_dir} not found - KB empty")
             return
         for p in sorted(self.kb_dir.rglob("*.md")):
-            text = p.read_text(encoding="utf-8", errors="ignore")
+            text = self._inline_tables(p, p.read_text(encoding="utf-8", errors="ignore"))
             title = next(
                 (l.lstrip("# ").strip() for l in text.splitlines() if l.startswith("#")),
                 p.stem,
@@ -66,6 +67,23 @@ class KnowledgeBase:
         if self.sections:
             self._avgdl = sum(s.length for s in self.sections.values()) / len(self.sections)
         print(f"[kb] loaded {len(self.sections)} sections from {self.kb_dir}")
+
+    @staticmethod
+    def _inline_tables(md_path: Path, text: str) -> str:
+        """섹션의 표는 같은 이름의 CSV(<섹션ID>-table<n>.csv)로 분리되어 있다 (SPEC §1).
+        마크다운에는 '(표: 파일명)' 자리 표시만 있으므로, 표 내용을 그 자리에 넣어
+        검색과 근거 판정에 함께 쓰이게 한다. 자리 표시가 없으면 끝에 붙인다."""
+        for t in sorted(md_path.parent.glob(f"{md_path.stem}-table*.csv")):
+            try:
+                rows = [r for r in csv.reader(t.read_text(encoding="utf-8-sig", errors="ignore").splitlines()) if r]
+            except Exception:
+                continue
+            if not rows:
+                continue
+            body = "\n".join("| " + " | ".join(c.strip() for c in r) + " |" for r in rows)
+            marker = f"(표: {t.name})"
+            text = text.replace(marker, body) if marker in text else text + "\n\n" + body
+        return text
 
     # ---------- 검색 ----------
     def search(self, query: str, k: int = 5, k1: float = 1.5, b: float = 0.75) -> list[tuple[Section, float]]:
