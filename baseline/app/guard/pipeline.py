@@ -24,12 +24,22 @@ from app.guard import config as C
 from app.guard import policy, prompts
 
 
-async def check_input(messages: list[dict]) -> dict:
+async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> dict:
     if not messages:
         return {"decision": "allow", "category": "low_signal_input"}
+    system, user = prompts.INPUT_SYSTEM, prompts.INPUT_USER.format(conversation=conversation_text(messages))
+    if kb is not None and C.INPUT_USE_MATERIAL:
+        # 질문과 가까운 자료를 함께 보여 줘야 '자료에 없는 값'(out_of_material)을 가려낼 수 있다
+        hits = kb.search(retrieval_query(messages), k=C.INPUT_TOP_K)
+        if hits:
+            system = prompts.INPUT_SYSTEM + prompts.INPUT_MATERIAL_RULE
+            user = prompts.INPUT_USER_WITH_MATERIAL.format(
+                context=format_context(hits, max_chars=C.SECTION_MAX_CHARS),
+                conversation=conversation_text(messages),
+            )
     out = await llm.chat_json(
-        prompts.INPUT_SYSTEM,
-        prompts.INPUT_USER.format(conversation=conversation_text(messages)),
+        system,
+        user,
         reasoning_effort=C.INPUT_REASONING_EFFORT,
         max_tokens=C.MAX_TOKENS,
     )
@@ -137,7 +147,7 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
     messages = req["messages"]
     candidate = req.get("candidate_answer")
 
-    tasks = [check_input(messages)]
+    tasks = [check_input(messages, kb)]
     if candidate is not None:
         tasks.append(check_output(messages, candidate, kb))
     results = await asyncio.gather(*tasks, return_exceptions=True)

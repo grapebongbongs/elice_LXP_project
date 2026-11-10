@@ -14,3 +14,7 @@ SAFE_FROM_INPUT = os.getenv("GUARD_SAFE_FROM_INPUT", "1") == "1"
 # grounded=false 인데 복원 가능한 구간이 하나도 없을 때 grounded=true 로 보정할지.
 # holdout 에서 0/1 을 비교해 정한다 (기본: 모델 판단 유지).
 GROUNDED_FALSE_REQUIRES_SPAN = os.getenv("GUARD_GROUNDED_FALSE_REQUIRES_SPAN", "0") == "1"
+
+# 입력 판정에 검색 자료를 함께 넣어 out_of_material 을 판별한다 (0 이면 대화만 보고 판정).
+INPUT_USE_MATERIAL = os.getenv("GUARD_INPUT_USE_MATERIAL", "1") == "1"
+INPUT_TOP_K = int(os.getenv("GUARD_INPUT_TOP_K", "3"))
