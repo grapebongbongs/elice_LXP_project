@@ -55,6 +55,40 @@ def build_query(messages: list[dict]) -> str:
     return f"{last} {last} {prev}".strip()
 
 
+def english_ratio(text: str) -> float:
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(c.isascii() for c in letters) / len(letters)
+
+
+async def korean_query(text: str) -> str:
+    out = await llm.chat_json(
+        prompts.QUERY_KO_SYSTEM, f"<질문>\n{text}\n</질문>", reasoning_effort="minimal", max_tokens=400
+    )
+    q = out.get("query") if out else None
+    return q.strip() if isinstance(q, str) else ""
+
+
+async def retrieve(messages: list[dict], kb: KnowledgeBase):
+    """BM25 검색. 영어 위주 질문이면 한국어 검색어로 한 번 더 찾아 앞에 합친다."""
+    query = build_query(messages)
+    hits = kb.search(query, k=C.TOP_K)
+    users = [m["content"] for m in messages if m.get("role") == "user" and m.get("content")]
+    last = users[-1] if users else ""
+    if C.ENGLISH_QUERY_RATIO > 0 and english_ratio(last) >= C.ENGLISH_QUERY_RATIO:
+        try:
+            ko = await korean_query(last)
+        except Exception as e:
+            log_error("tutor.query_ko", e)
+            ko = ""
+        if ko:
+            ko_hits = kb.search(f"{ko} {ko} {query}", k=C.TOP_K)
+            seen = {s.id for s, _ in ko_hits}
+            hits = (ko_hits + [(s, sc) for s, sc in hits if s.id not in seen])[: C.TOP_K]
+    return hits
+
+
 # ---------------------------------------------------------------- 1단계: 분류
 async def classify(messages: list[dict], hits=None) -> tuple[str, str | None]:
     if hits and C.CLASSIFY_USE_MATERIAL:
@@ -130,7 +164,7 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
         return tutor_fallback()
 
     # 검색(BM25, 수 ms)을 먼저 하고 그 자료를 분류에도 넣는다 → 자료에 없는 질문(out_of_material) 판별
-    hits = kb.search(build_query(messages), k=C.TOP_K)
+    hits = await retrieve(messages, kb)
     cls_task = asyncio.create_task(classify(messages, hits))
     try:
         category, harm_type = await cls_task

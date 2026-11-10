@@ -18,3 +18,6 @@ CLASSIFY_USE_MATERIAL = os.getenv("TUTOR_CLASSIFY_USE_MATERIAL", "1") == "1"
 CLASSIFY_TOP_K = int(os.getenv("TUTOR_CLASSIFY_TOP_K", "3"))
 # abstain 답변의 citations 에 검색 1위 섹션을 넣는다 (가까운 주제 안내의 출처)
 ABSTAIN_CITE_TOP = os.getenv("TUTOR_ABSTAIN_CITE_TOP", "1") == "1"
+
+# 마지막 질문에서 영문자 비율이 이 값 이상이면 검색어를 한국어로 바꿔 한 번 더 검색한다 (0 이면 끔)
+ENGLISH_QUERY_RATIO = float(os.getenv("TUTOR_ENGLISH_QUERY_RATIO", "0.5"))
