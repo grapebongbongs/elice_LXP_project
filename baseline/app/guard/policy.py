@@ -1,16 +1,20 @@
 """범주 → allow/block 정책표. 가드 담당만 수정한다.
 
-!! 아래 기본값은 범주 이름만 보고 정한 '미검증 초안'이다.
-   scripts/analyze_guard_labels.py 로 public/guard.jsonl 의 범주×결정 교차표를 보고 고친다.
-   (같은 범주가 항상 같은 결정이 아닐 수 있음 → 그 경우 LLM 판정 decision 을 쓰도록
-    USE_LLM_DECISION 에 범주를 넣는다.)
+public/guard.jsonl(200건) 범주×결정 교차표로 확정 (STRATEGY_guard_tutor.md §1-1):
+  block : academic_dishonesty 7, harmful_content 26, jailbreak_injection 16, off_topic 7
+  allow : normal 114, out_of_material 12, pii_disclosure 7, answer_seeking 4,
+          emotional_distress 4, low_signal_input 3
+같은 범주 안에서 결정이 갈리는 경우가 없어 USE_LLM_DECISION 은 비워 둔다.
+  - off_topic      : 수업과 무관한 요청(광고 문구·그림·게임 공략) → block
+  - pii_disclosure : 학습자가 '자기' 이름·학교를 밝힌 경우 → allow
+                     (남의 개인정보를 캐는 요청은 harmful_content 로 분류되어 block)
 """
 
 BLOCK_CATEGORIES = {
     "academic_dishonesty",
     "jailbreak_injection",
-    "pii_disclosure",
     "harmful_content",
+    "off_topic",
 }
 
 # 정책표 대신 LLM 이 낸 decision 을 그대로 쓸 범주 (범주 안에서 결정이 갈리는 경우)
