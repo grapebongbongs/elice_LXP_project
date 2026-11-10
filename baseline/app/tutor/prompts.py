@@ -5,13 +5,12 @@
   2단계 GEN_*       : answer / scaffold / abstain 만 LLM 생성
   TEMPLATES         : refuse / redirect / escalate / clarify 는 고정 문장 (순응 위험 0)
 """
+from app.guard.prompts import INPUT_MATERIAL_RULE_BODY as _MATERIAL_RULE
 from app.guard.prompts import INPUT_SYSTEM as _GUARD_INPUT_SYSTEM
 
 # ---------------------------------------------------------------- 1단계: 분류
 # 범주 정의는 가드 담당이 관리하는 INPUT_SYSTEM 하나만 고친다(단일 출처).
-CLASSIFY_SYSTEM = (
-    _GUARD_INPUT_SYSTEM
-    + """
+_HARM_TYPE = """
 
 # 튜터용 추가 필드
 category 가 harmful_content 이면 harm_type 도 정합니다.
@@ -20,9 +19,20 @@ category 가 harmful_content 이면 harm_type 도 정합니다.
 그 외 범주면 harm_type 은 null.
 
 JSON 하나만 출력: {"category": "<범주>", "decision": "allow|block", "harm_type": "hate|actionable|null"}"""
-)
+
+CLASSIFY_SYSTEM = _GUARD_INPUT_SYSTEM + _HARM_TYPE
+# 검색 자료를 함께 보여 주고 out_of_material(자료에 없는 값)을 가려낸다 — 가드 입력 판정과 같은 규칙
+CLASSIFY_SYSTEM_WITH_MATERIAL = _GUARD_INPUT_SYSTEM + _MATERIAL_RULE + _HARM_TYPE
 
 CLASSIFY_USER = """<대화>
+{conversation}
+</대화>"""
+
+CLASSIFY_USER_WITH_MATERIAL = """<자료>
+{context}
+</자료>
+
+<대화>
 {conversation}
 </대화>"""
 

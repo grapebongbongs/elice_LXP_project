@@ -56,10 +56,19 @@ def build_query(messages: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------- 1단계: 분류
-async def classify(messages: list[dict]) -> tuple[str, str | None]:
+async def classify(messages: list[dict], hits=None) -> tuple[str, str | None]:
+    if hits and C.CLASSIFY_USE_MATERIAL:
+        system = prompts.CLASSIFY_SYSTEM_WITH_MATERIAL
+        user = prompts.CLASSIFY_USER_WITH_MATERIAL.format(
+            context=format_context(hits[: C.CLASSIFY_TOP_K], max_chars=C.SECTION_MAX_CHARS),
+            conversation=conversation_text(messages),
+        )
+    else:
+        system = prompts.CLASSIFY_SYSTEM
+        user = prompts.CLASSIFY_USER.format(conversation=conversation_text(messages))
     out = await llm.chat_json(
-        prompts.CLASSIFY_SYSTEM,
-        prompts.CLASSIFY_USER.format(conversation=conversation_text(messages)),
+        system,
+        user,
         reasoning_effort=C.CLASSIFY_REASONING_EFFORT,
         max_tokens=C.CLASSIFY_MAX_TOKENS,
     )
@@ -88,6 +97,9 @@ def template_answer(action: str, category: str, harm_type: str | None) -> dict:
 
 # ---------------------------------------------------------------- 인용 필터
 def filter_citations(raw, action: str, hits: list[tuple[Section, float]]) -> list[str]:
+    if action == "abstain":
+        # 자료에 없다고 답하면서 가까운 주제를 안내하므로, 그 안내의 출처(검색 1위)를 밝힌다
+        return [hits[0][0].id] if hits and C.ABSTAIN_CITE_TOP else []
     if action not in CITING:
         return []
     order = [s.id for s, _ in hits]
@@ -117,9 +129,9 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
     if not messages:
         return tutor_fallback()
 
-    # 분류(LLM)를 먼저 띄워 두고 그동안 검색 → 지연 은닉
-    cls_task = asyncio.create_task(classify(messages))
+    # 검색(BM25, 수 ms)을 먼저 하고 그 자료를 분류에도 넣는다 → 자료에 없는 질문(out_of_material) 판별
     hits = kb.search(build_query(messages), k=C.TOP_K)
+    cls_task = asyncio.create_task(classify(messages, hits))
     try:
         category, harm_type = await cls_task
     except Exception as e:  # 분류 오류는 normal 로 진행
