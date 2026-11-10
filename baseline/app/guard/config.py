@@ -6,3 +6,11 @@ SECTION_MAX_CHARS = int(os.getenv("GUARD_SECTION_CHARS", "2500"))
 INPUT_REASONING_EFFORT = os.getenv("GUARD_INPUT_REASONING_EFFORT", "low")
 OUTPUT_REASONING_EFFORT = os.getenv("GUARD_OUTPUT_REASONING_EFFORT", "low")
 MAX_TOKENS = int(os.getenv("GUARD_MAX_TOKENS", "2000"))
+
+# output.safe 를 입력 판정에서 유도 (safe = decision == "allow").
+# 공개 세트 후보 답변 86건 전부에서 성립 (STRATEGY_guard_tutor.md §1-2). 0 이면 LLM 판정 사용.
+SAFE_FROM_INPUT = os.getenv("GUARD_SAFE_FROM_INPUT", "1") == "1"
+
+# grounded=false 인데 복원 가능한 구간이 하나도 없을 때 grounded=true 로 보정할지.
+# holdout 에서 0/1 을 비교해 정한다 (기본: 모델 판단 유지).
+GROUNDED_FALSE_REQUIRES_SPAN = os.getenv("GUARD_GROUNDED_FALSE_REQUIRES_SPAN", "0") == "1"
