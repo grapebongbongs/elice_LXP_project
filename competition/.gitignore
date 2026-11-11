@@ -1,0 +1,14 @@
+# API 키가 들어 있는 파일 (SPEC 7.1: 키를 코드에 커밋하지 말 것)
+.env
+
+# Python 산출물
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 로그 (SPEC 8: 요청/답변 본문 저장 금지)
+*.log
+
+# 실제 token을 적었다면 주석을 풀어 제외 (채점에는 런박스의 파일이 쓰이므로 git에 없어도 됨)
+# submission.json

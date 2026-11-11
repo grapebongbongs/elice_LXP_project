@@ -1,0 +1,5 @@
+# 홈 디렉터리 전체를 기본적으로 무시
+/*
+# 예외: competition 폴더와 이 파일만 추적
+!/.gitignore
+!/competition/
