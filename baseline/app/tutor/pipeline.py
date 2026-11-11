@@ -65,7 +65,7 @@ def english_ratio(text: str) -> float:
 
 async def korean_query(text: str) -> str:
     out = await llm.chat_json(
-        prompts.QUERY_KO_SYSTEM, f"<질문>\n{text}\n</질문>", reasoning_effort="minimal", max_tokens=400
+        prompts.QUERY_KO_SYSTEM, f"<질문>\n{text}\n</질문>", reasoning_effort="minimal", max_tokens=400, tag="tutor.query_ko"
     )
     q = out.get("query") if out else None
     return q.strip() if isinstance(q, str) else ""
@@ -106,6 +106,7 @@ async def classify(messages: list[dict], hits=None) -> tuple[str, str | None]:
         user,
         reasoning_effort=C.CLASSIFY_REASONING_EFFORT,
         max_tokens=C.CLASSIFY_MAX_TOKENS,
+        tag="tutor.classify",
     )
     if not out:
         return "normal", None  # 분류 실패 시 다수 범주(normal)로 진행 — 생성 프롬프트가 2차 방어
@@ -184,7 +185,7 @@ async def generate(action: str, messages: list[dict], hits) -> dict | None:
         conversation=conversation_text(messages),
     )
     return await llm.chat_json(
-        prompts.GEN_SYSTEMS[action], user, reasoning_effort=C.REASONING_EFFORT, max_tokens=C.MAX_TOKENS
+        prompts.GEN_SYSTEMS[action], user, reasoning_effort=C.REASONING_EFFORT, max_tokens=C.MAX_TOKENS, tag="tutor.generate"
     )
 
 

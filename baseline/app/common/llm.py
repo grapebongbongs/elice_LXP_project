@@ -2,15 +2,18 @@
 
 - 동시성 세마포어로 64개 동시 요청에서도 과호출 방지
 - JSON 응답 강제 + 파싱 실패 시 None 반환 (호출 측이 fallback)
+- 호출마다 tag·소요 시간·결과 이름만 로그 (본문 금지, 규칙 A-7)
 """
 import asyncio
 import json
 import re
+import time
 from typing import Any
 
 from openai import AsyncOpenAI, BadRequestError
 
 from app import config
+from app.common.logging_util import log_llm
 
 _client: AsyncOpenAI | None = None
 _sem = asyncio.Semaphore(config.LLM_MAX_CONCURRENCY)
@@ -54,6 +57,7 @@ async def chat_json(
     *,
     reasoning_effort: str = "low",
     max_tokens: int = 2000,
+    tag: str = "",
 ) -> dict[str, Any] | None:
     """system/user 프롬프트로 JSON 객체 하나를 받는다. 실패하면 None."""
     global _supports_effort
@@ -75,14 +79,38 @@ async def chat_json(
     if _supports_effort and reasoning_effort:
         kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
 
-    async with _sem:
-        try:
-            resp = await client().chat.completions.create(**kwargs)
-        except BadRequestError as e:
-            # reasoning_effort 때문에 거절된 경우에만 끄고 재시도 (다른 400 은 그대로 올림)
-            if "extra_body" not in kwargs or "reasoning" not in str(e).lower():
-                raise
-            _supports_effort = False
-            kwargs.pop("extra_body")
-            resp = await client().chat.completions.create(**kwargs)
-    return _parse_json(resp.choices[0].message.content or "")
+    t0 = time.perf_counter()
+    try:
+        async with _sem:
+            try:
+                resp = await client().chat.completions.create(**kwargs)
+            except BadRequestError as e:
+                # reasoning_effort 때문에 거절된 경우에만 끄고 재시도 (다른 400 은 그대로 올림)
+                if "extra_body" not in kwargs or "reasoning" not in str(e).lower():
+                    raise
+                _supports_effort = False
+                kwargs.pop("extra_body")
+                resp = await client().chat.completions.create(**kwargs)
+    except asyncio.CancelledError:
+        # 요청 마감(REQUEST_DEADLINE)에 걸려 바깥에서 끊긴 경우
+        log_llm(tag, (time.perf_counter() - t0) * 1000, "cancelled")
+        raise
+    except Exception as e:
+        log_llm(tag, (time.perf_counter() - t0) * 1000, type(e).__name__)
+        raise
+    ms = (time.perf_counter() - t0) * 1000
+    choice = resp.choices[0]
+    out = _parse_json(choice.message.content or "")
+    log_llm(tag, ms, _outcome(choice, out))
+    return out
+
+
+def _outcome(choice: Any, out: dict | None) -> str:
+    """기본값으로 빠지는 이유를 이름 하나로. 본문은 보지 않고 상태만 본다."""
+    if out is not None:
+        return "ok"
+    if getattr(choice, "finish_reason", None) == "length":
+        return "length"  # 추론 토큰이 한도를 먹어 본문이 비거나 잘림
+    if not (choice.message.content or "").strip():
+        return "empty"
+    return "parse"

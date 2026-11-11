@@ -42,6 +42,7 @@ async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> 
         user,
         reasoning_effort=C.INPUT_REASONING_EFFORT,
         max_tokens=C.MAX_TOKENS,
+        tag="guard.input",
     )
     if not out:
         return {"decision": "allow", "category": "normal"}
@@ -118,6 +119,7 @@ async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) 
         ),
         reasoning_effort=C.OUTPUT_REASONING_EFFORT,
         max_tokens=C.MAX_TOKENS,
+        tag="guard.output",
     )
     if not out:
         return default
