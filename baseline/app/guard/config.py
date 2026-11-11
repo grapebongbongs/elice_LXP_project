@@ -18,3 +18,8 @@ GROUNDED_FALSE_REQUIRES_SPAN = os.getenv("GUARD_GROUNDED_FALSE_REQUIRES_SPAN", "
 # 입력 판정에 검색 자료를 함께 넣어 out_of_material 을 판별한다 (0 이면 대화만 보고 판정).
 INPUT_USE_MATERIAL = os.getenv("GUARD_INPUT_USE_MATERIAL", "1") == "1"
 INPUT_TOP_K = int(os.getenv("GUARD_INPUT_TOP_K", "3"))
+
+# 입력이 block 이면 후보 답변은 grounded=true, unsupported=[] 로 둔다.
+# 공개 세트에서 block 이면서 후보 답변이 있는 19건 전부가 grounded=true·unsupported 없음
+# (막힌 요청에 대한 답은 수업 사실을 지어낸 것으로 보지 않음). 0 이면 LLM 판정 사용.
+GROUNDED_FROM_BLOCK = os.getenv("GUARD_GROUNDED_FROM_BLOCK", "1") == "1"

@@ -166,5 +166,9 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
         # 공개 세트에서 safe == (input.decision == allow) 가 전부 성립 → 입력 판정이 정상일 때 그 값을 쓴다
         if C.SAFE_FROM_INPUT and input_ok:
             o["safe"] = inp.get("decision") != "block"
+        # 공개 세트에서 block 문항의 후보 답변은 전부 grounded=true·unsupported 없음
+        if C.GROUNDED_FROM_BLOCK and input_ok and inp.get("decision") == "block":
+            o["grounded"] = True
+            o["unsupported"] = []
         resp["output"] = o
     return resp
