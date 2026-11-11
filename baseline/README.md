@@ -90,3 +90,23 @@ python scripts/eval_public.py --part guard --token "$SERVER_TOKEN"
 | 공통 | 오류·25초 초과 시 규격 fallback, 본문 미로깅 | 임베딩 하이브리드 검색, 지연 시간 측정 |
 
 LLM 이 없을 때의 fallback: 튜터 `clarify`, 가드 `allow/normal` + `grounded/safe=true`.
+
+## Elice 실험 매크로
+
+`scripts/run_experiment.sh`는 **깨끗하게 커밋된 후보 브랜치**에서만 실행합니다. 실제 LLM으로 64 동시성 검사를 하고 공개 세트 평가를 10회 실행합니다. 후보 중위값이 기존 champion보다 3점 이내이면 champion도 같은 시점에 10회 재평가합니다.
+
+```bash
+git switch codex/experiment/<id>
+bash scripts/run_experiment.sh \
+  --id <YYYYMMDD-sequence> \
+  --scope tutor \
+  --hypothesis "가설을 한 문장으로 적습니다"
+```
+
+- `experiment-reports/champion.json`이 없으면 최초 기준을 만드는 `bootstrap_needs_review` 결과만 기록합니다.
+- 64 동시성, 형식, 인증, 리다이렉트, 각 평가의 형식·판정 오류가 한 번이라도 발생하면 즉시 실패합니다.
+- 총점 중위값 승격 폭은 `Δ=3`입니다. total은 올랐지만 guard가 떨어지거나, tutor가 오르지 않은 상태에서 guard만 4.2점 이상 오르면 `review_required`로 멈춥니다.
+- 요청·응답 본문은 저장하지 않습니다. `/tmp`에는 숫자 집계와 서버 메타 로그만 잠시 두고 종료 시 삭제합니다.
+- `scripts/publish_experiment_result.sh`가 현재 후보 브랜치에 `experiment-reports/<id>.json`만 커밋·push합니다. `main`/`champion`에는 직접 push하지 않습니다.
+
+상세 운영 지침은 로컬 전용 `.docs/experiment-loop.md`를 확인하세요.
