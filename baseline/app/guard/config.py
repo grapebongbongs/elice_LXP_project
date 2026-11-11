@@ -3,7 +3,7 @@ import os
 
 TOP_K = int(os.getenv("GUARD_TOP_K", "4"))
 SECTION_MAX_CHARS = int(os.getenv("GUARD_SECTION_CHARS", "3000"))
-INPUT_REASONING_EFFORT = os.getenv("GUARD_INPUT_REASONING_EFFORT", "low")
+INPUT_REASONING_EFFORT = os.getenv("GUARD_INPUT_REASONING_EFFORT", "medium")  # 입력 분류만 medium (답변 검증은 low, #10에서 medium은 시간 초과)
 OUTPUT_REASONING_EFFORT = os.getenv("GUARD_OUTPUT_REASONING_EFFORT", "low")
 MAX_TOKENS = int(os.getenv("GUARD_MAX_TOKENS", "2000"))
 
