@@ -1,6 +1,9 @@
 .env
 .docs/
+.venv/
+/.git_info*
 __pycache__/
 *.pyc
 
+# 공개하지 않는 원본 서버/채점 로그. 수치 요약·report.json은 추적한다.
 exp-result-*/logs/

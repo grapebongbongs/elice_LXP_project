@@ -119,6 +119,33 @@ bash scripts/run_experiment.sh \
 후보가 커밋된 뒤 `scripts/evaluate_current_candidate.sh`를 실행하면 KST 시각+커밋 해시의
 실험 ID, 최신 커밋 제목의 가설, 변경 경로 기반 범위를 자동으로 생성해 실험 매크로를 호출합니다.
 
+### 후보 브랜치·커밋·push 만들기
+
+작업 트리의 변경을 새 후보 브랜치 하나에 묶어 원격으로 올릴 때는 아래 스크립트를 쓴다.
+현재의 **모든 비무시 변경**은 기본으로 한 커밋에 포함된다. 기존 브랜치,
+`main`, `champion`을 덮어쓰거나 force-push하지 않는다.
+
+```bash
+# .git_info를 현재 후보 정보로 갱신한 뒤, 인자 없이 실행할 수 있다.
+bash scripts/create_candidate_branch.sh
+
+# 최초 실행: feature·번호를 기록한다.
+bash scripts/create_candidate_branch.sh \
+  --feature tutor-hybrid-retrieval \
+  --number 01 \
+  --update "add 1536d BM25 and embedding RRF retrieval"
+
+# 다음 변경: .git_info를 읽어 같은 feature의 번호를 02로 자동 증가시킨다.
+bash scripts/create_candidate_branch.sh \
+  --update "tune dense retrieval candidate count"
+```
+
+브랜치는 `TraderPark/<변경특징>-<변경번호>` 형식으로 생성되고 upstream을 설정한다. 예:
+`TraderPark/tutor-hybrid-retrieval-01`. `.git_info`에는 마지막 `feature`, `number`, `message`를
+로컬로만 저장한다. 실행 전 변경 목록·커밋 메시지를 보여 주며 `y` 또는 `yes`를 입력해야만
+브랜치 생성·커밋·push를 수행한다. 모든 비무시 변경은 기본으로 포함된다. `.env`, `.docs/`,
+`.venv/`, `.git_info`, `exp-result-*/logs/`는 `.gitignore`에 의해 포함되지 않는다.
+
 ### 실험 진행 대시보드
 
 실험을 실행하기 전 별도 터미널에서 다음을 실행하면 64 동시성 검사 상태와 10회
