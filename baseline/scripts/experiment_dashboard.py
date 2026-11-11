@@ -231,6 +231,9 @@ def main() -> int:
             return update(args)
         curses.wrapper(render, Path(args.status_file))
         return 0
+    except KeyboardInterrupt:
+        # curses.wrapper가 화면을 원복한 뒤 여기로 온다. Ctrl+C는 오류가 아닌 종료 요청이다.
+        return 0
     except (OSError, ValueError, TypeError) as error:
         print(f"[experiment-dashboard] {type(error).__name__}: {error}", file=sys.stderr)
         return 2

@@ -108,7 +108,7 @@ bash scripts/run_experiment.sh \
 - 64 동시성, 형식, 인증, 리다이렉트, 각 평가의 형식·판정 오류가 한 번이라도 발생하면 즉시 실패합니다.
 - 총점 중위값 승격 폭은 `Δ=3`입니다. total은 올랐지만 guard가 떨어지거나, tutor가 오르지 않은 상태에서 guard만 4.2점 이상 오르면 `review_required`로 멈춥니다.
 - 요청·응답 본문은 저장하지 않습니다. `/tmp`에는 숫자 집계와 서버 메타 로그만 잠시 두고 종료 시 삭제합니다.
-- `scripts/publish_experiment_result.sh`가 `exp-result-<id>/`의 수치 결과와 `report.json`을 현재 후보 브랜치에 커밋·push합니다. 같은 폴더의 `logs/`는 런박스에 남지만 Git에는 올라가지 않습니다. `main`/`champion`에는 직접 push하지 않습니다.
+- `scripts/publish_experiment_result.sh`는 저장소에 완료된 `exp-result-<id>/report.json`이 하나뿐이면 인자 없이 그 수치 결과를 현재 후보 브랜치에 커밋·push합니다. 완료된 결과가 여러 개면 `--result-dir exp-result-<id>`로 대상을 지정합니다. 같은 폴더의 `logs/`는 런박스에 남지만 Git에는 올라가지 않습니다. `main`/`champion`에는 직접 push하지 않습니다.
 
 상세 운영 지침은 로컬 전용 `.docs/experiment-loop.md`를 확인하세요.
 
@@ -146,6 +146,22 @@ bash scripts/create_candidate_branch.sh \
 브랜치 생성·커밋·push를 수행한다. 모든 비무시 변경은 기본으로 포함된다. `.env`, `.docs/`,
 `.venv/`, `.git_info`, `exp-result-*/logs/`는 `.gitignore`에 의해 포함되지 않는다.
 
+### 하이브리드 검색 파라미터 순차 실험
+
+`scripts/sweep_retrieval_params.sh`는 `HYBRID_DENSE_K`와 `HYBRID_RRF_K` 조합을 같은 base
+커밋에서 순차 평가한다. 각 후보는 새 브랜치에 두 config 값만 커밋·push한 뒤 64 동시성 검사와
+공개 세트 10회 평가를 모두 마쳐야 다음 후보로 진행한다. 병렬 서버·병렬 채점은 사용하지 않는다.
+
+```bash
+bash scripts/sweep_retrieval_params.sh \
+  --candidates 5:60,5:20,3:60 \
+  --start-number 02
+```
+
+각 값은 `dense_k:RRF_k` 형식이다. 위 배열은 첫 번째와 두 번째에서 RRF만, 첫 번째와 세 번째에서
+dense 후보 수만 달라 원인을 분리해 비교할 수 있다. `--start-number`를 생략하면 `.git_info`의
+다음 번호부터 시작하며, 실행 전 한 번 `y`/`yes` 확인을 받는다.
+
 ### 실험 진행 대시보드
 
 실험을 실행하기 전 별도 터미널에서 다음을 실행하면 64 동시성 검사 상태와 10회
@@ -157,7 +173,7 @@ python3 scripts/experiment_dashboard.py
 
 `c`/`h`로 candidate/champion 표를 전환하고 `q`로 화면만 닫는다. 상태 파일에는 수치와
 단계만 기록하며 요청·응답 본문이나 비밀값은 표시·저장하지 않는다. 상세 내용은 로컬 전용
-`.docs/experiment-loop.md`를 참고한다.
+`.docs/experiment-loop.md`를 참고한다. `Ctrl+C`도 traceback 없이 대시보드만 종료한다.
 
 ### 튜터 하이브리드 검색 실험
 
