@@ -1,0 +1,79 @@
+{
+  "experiment_id": "20261112-055804-9efbb00",
+  "base_commit": "cc3d207a92e096783cd9348f8693c6df1a537ebf",
+  "candidate_commit": "9efbb006cefc251a325af3c4c103ca6064a7f9be",
+  "scope": "common",
+  "hypothesis": "feat(tutor-hybrid-retrieval): dense_k=3, rrf_k=60",
+  "load_test": {
+    "requests": 64,
+    "elapsed_seconds": 16.5,
+    "p50_seconds": 6.06,
+    "p95_seconds": 11.87,
+    "max_seconds": 16.46,
+    "errors": 0,
+    "passed": true
+  },
+  "candidate_summary": {
+    "runs": 10,
+    "total": {
+      "values": [
+        82.82,
+        83.65,
+        82.16,
+        83.94,
+        83.95,
+        81.75,
+        82.76,
+        83.69,
+        84.01,
+        84.82
+      ],
+      "median": 83.67,
+      "mean": 83.355,
+      "min": 81.75,
+      "max": 84.82
+    },
+    "tutor": {
+      "values": [
+        80.83,
+        82.88,
+        80.75,
+        81.88,
+        81.38,
+        80.5,
+        81.12,
+        83.12,
+        83.0,
+        81.75
+      ],
+      "median": 81.565,
+      "mean": 81.721,
+      "min": 80.5,
+      "max": 83.12
+    },
+    "guard": {
+      "values": [
+        84.81,
+        84.42,
+        83.58,
+        86.01,
+        86.52,
+        83.0,
+        84.4,
+        84.25,
+        85.02,
+        87.89
+      ],
+      "median": 84.615,
+      "mean": 84.99,
+      "min": 83.0,
+      "max": 87.89
+    },
+    "invalid_total": 0,
+    "judge_errors_total": 0
+  },
+  "decision": {
+    "decision": "bootstrap_needs_review",
+    "reason": "champion_summary_missing"
+  }
+}
