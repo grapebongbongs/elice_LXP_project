@@ -21,3 +21,8 @@ ABSTAIN_CITE_TOP = os.getenv("TUTOR_ABSTAIN_CITE_TOP", "1") == "1"
 
 # 마지막 질문에서 영문자 비율이 이 값 이상이면 검색어를 한국어로 바꿔 한 번 더 검색한다 (0 이면 끔)
 ENGLISH_QUERY_RATIO = float(os.getenv("TUTOR_ENGLISH_QUERY_RATIO", "0.5"))
+
+# answer 경로에서 모델이 옮긴 근거 문장(quote)이 검색 자료에 실제로 있는지 코드로 확인한다.
+# 없으면 지어낸 답으로 보고 abstain 으로 바꾼다. 있으면 그 문장이 든 섹션을 인용한다. (0 이면 끔)
+QUOTE_CHECK = os.getenv("TUTOR_QUOTE_CHECK", "1") == "1"
+QUOTE_MIN_COVERAGE = float(os.getenv("TUTOR_QUOTE_MIN_COVERAGE", "0.8"))  # quote 글자 bigram 중 섹션에 있는 비율

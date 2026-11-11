@@ -54,7 +54,12 @@ GEN_ANSWER = _GEN_COMMON + """
 - citations 에는 답의 핵심 사실이 실제로 적힌 섹션 id 딱 1개를 넣습니다.
 - <자료>에 질문의 답이 없으면 지어내지 말고 action 을 "abstain" 으로 바꿉니다. 학습자가 이름을 붙여 묻는 규칙·기준·등급·수수료·한도가 자료에 그 이름이나 같은 뜻으로 없으면, 비슷한 다른 내용으로 대신 답하지 말고 abstain 입니다. 이때 answer 는 "자료에 나와 있지 않아요"라는 뜻을 밝히고 자료에 있는 가까운 주제를 한 문장 안내하며, 구체 수치는 쓰지 않습니다. citations 는 [].
 
-JSON 하나만 출력: {"action": "answer|abstain", "answer": "<답변>", "citations": ["섹션ID"]}"""
+- quote 에는 답의 핵심 사실이 적힌 <자료>의 문장(또는 표의 한 행)을 한 글자도 바꾸지 말고 그대로 옮깁니다(100자 이내). 그대로 옮길 문장이 없으면 답이 자료에 없는 것이므로 abstain 입니다.
+
+JSON 하나만 출력: {"action": "answer|abstain", "answer": "<답변>", "citations": ["섹션ID"], "quote": "<자료 원문 그대로>"}"""
+
+# 근거 문장 확인에 실패해 abstain 으로 바꿀 때 쓰는 답변 (사실·수치를 담지 않는다)
+ABSTAIN_FALLBACK = "이 내용은 수업 자료에 나와 있지 않아요. 자료에 있는 관련 내용을 함께 살펴보고 싶다면 어떤 실습이나 예제인지 알려 주세요."
 
 GEN_SCAFFOLD = _GEN_COMMON + """
 # 이번 응대: 힌트로 이끌기 (scaffold)

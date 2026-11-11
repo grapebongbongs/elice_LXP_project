@@ -11,11 +11,12 @@ req = {"messages": [...], "session_id": ..., "spec_version": ...}
 - 인용은 검색된 섹션 중에서만, 최대 MAX_CITATIONS 개.
 """
 import asyncio
+import re
 
 from app.common import llm
 from app.common.kb import KnowledgeBase, Section, conversation_text, format_context
 from app.common.logging_util import log_error
-from app.common.normalize import compact, normalize_messages
+from app.common.normalize import compact, normalize_messages, normalize_text
 from app.common.schema import GUARD_CATEGORIES, tutor_fallback
 from app.tutor import config as C
 from app.tutor import prompts
@@ -147,6 +148,35 @@ def filter_citations(raw, action: str, hits: list[tuple[Section, float]]) -> lis
     return cits[: C.MAX_CITATIONS]
 
 
+# ---------------------------------------------------------------- 근거 문장 확인
+_QUOTE_STRIP = re.compile(r"[\s|`*#>\-.,!?~·…'\"“”‘’():;]+")
+
+
+def _squash(text: str) -> str:
+    return _QUOTE_STRIP.sub("", normalize_text(text or ""))
+
+
+def _bigrams(text: str) -> set[str]:
+    return {text[i : i + 2] for i in range(len(text) - 1)}
+
+
+def locate_quote(quote, hits) -> str | None:
+    """quote 가 검색된 섹션 중 어디에 있는지 찾아 섹션 id 를 돌려준다. 못 찾으면 None."""
+    q = _squash(quote) if isinstance(quote, str) else ""
+    if len(q) < 4:
+        return None
+    qb = _bigrams(q)
+    best_id, best_cov = None, 0.0
+    for s, _ in hits:
+        t = _squash(s.text)
+        if q in t:
+            return s.id
+        cov = len(qb & _bigrams(t)) / len(qb)
+        if cov > best_cov:
+            best_id, best_cov = s.id, cov
+    return best_id if best_cov >= C.QUOTE_MIN_COVERAGE else None
+
+
 # ---------------------------------------------------------------- 2단계: 생성
 async def generate(action: str, messages: list[dict], hits) -> dict | None:
     user = prompts.GEN_USER.format(
@@ -186,11 +216,20 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
         final_action = "abstain"
 
     answer = out["answer"].strip()
+    raw_citations = out.get("citations")
+    if final_action == "answer" and C.QUOTE_CHECK:
+        quote_sid = locate_quote(out.get("quote"), hits)
+        if quote_sid is None:
+            # 자료에서 그대로 옮길 근거 문장을 못 댔다 → 지어낸 답으로 보고 abstain
+            final_action = "abstain"
+            answer = prompts.ABSTAIN_FALLBACK
+        else:
+            raw_citations = [quote_sid]  # 근거 문장이 실제로 들어 있는 섹션을 인용
     if final_action == "answer" and category == "pii_disclosure" and prompts.PII_NOTE not in answer:
         answer = f"{answer} {prompts.PII_NOTE}"
 
     return {
         "answer": answer,
         "action": final_action,
-        "citations": filter_citations(out.get("citations"), final_action, hits),
+        "citations": filter_citations(raw_citations, final_action, hits),
     }
