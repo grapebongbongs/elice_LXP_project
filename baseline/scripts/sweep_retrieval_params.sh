@@ -134,7 +134,9 @@ set_config_value() {
     echo "Could not find expected ${name} setting" >&2
     exit 2
   }
-  sed -i -E "s|^(${name} = int\\(os.getenv\\(\"${env_name}\", \"))[0-9]+(\"\\)\\))$|\\1${value}\\2|" "$CONFIG_FILE"
+  # Replace the full assignment rather than capturing nested parentheses in sed.
+  # This is portable to the GNU sed available in the Elice RunBox.
+  sed -i -E "s|^${name} = int\\(os.getenv\\(\"${env_name}\", \"[0-9]+\"\\)\\)$|${name} = int(os.getenv(\"${env_name}\", \"${value}\"))|" "$CONFIG_FILE"
   grep -q "${env_name}\", \"${value}\"" "$CONFIG_FILE" || {
     echo "Failed to set ${name}=${value}" >&2
     exit 2
