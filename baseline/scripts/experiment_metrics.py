@@ -17,6 +17,7 @@ SCORE_RE = re.compile(
 LOAD_RE = re.compile(
     r"(\d+)\s+reqs in\s+([0-9.]+)s\s+p50=([0-9.]+)s\s+p95=([0-9.]+)s\s+max=([0-9.]+)s"
 )
+ITEM_POINTS_RE = re.compile(r"^[^\t]+\t(?:tutor|guard)\t[^\t]+\t([0-9.]+)(?:\t형식 오류)?$", re.MULTILINE)
 FORBIDDEN = {"answer", "candidate_answer", "content", "messages", "request", "response", "unsupported"}
 
 
@@ -49,12 +50,18 @@ def stat(values: list[float]) -> dict[str, Any]:
 
 
 def parse_score(args: argparse.Namespace) -> None:
-    matches = SCORE_RE.findall(Path(args.input).read_text(encoding="utf-8", errors="replace"))
+    text = Path(args.input).read_text(encoding="utf-8", errors="replace")
+    matches = SCORE_RE.findall(text)
     if not matches:
         raise ValueError("score_local.py aggregate line was not found")
     total, tutor, guard, invalid, judge_errors = matches[-1]
+    points = [float(value) for value in ITEM_POINTS_RE.findall(text)]
+    correct = sum(point >= 99.95 for point in points)
+    wrong = sum(point <= 0.05 for point in points)
+    partial = len(points) - correct - wrong
     row = {"total": float(total), "tutor": float(tutor), "guard": float(guard),
-           "invalid": int(invalid), "judge_errors": int(judge_errors)}
+           "invalid": int(invalid), "judge_errors": int(judge_errors),
+           "correct": correct, "partial": partial, "wrong": wrong}
     with Path(args.output).open("a", encoding="utf-8") as output:
         output.write(json.dumps(row, ensure_ascii=False) + "\n")
 

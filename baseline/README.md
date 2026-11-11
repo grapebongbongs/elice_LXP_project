@@ -16,7 +16,8 @@ baseline/
 │   │   ├── schema.py        [공통] 요청 정규화 · 응답 규격 강제 · unsupported 원문 위치 복원
 │   │   └── logging_util.py  [공통] 시간·길이·상태·오류명만 로깅
 │   ├── tutor/               ★ 튜터 담당만 수정
-│   │   ├── pipeline.py      handle(req, kb) → {answer, action, citations}
+│   │   ├── pipeline.py      handle(req, kb, retriever=None) → {answer, action, citations}
+│   │   ├── retrieval.py     튜터 전용 임베딩 + BM25 RRF 검색
 │   │   ├── prompts.py       시스템 프롬프트·action 기준
 │   │   └── config.py        TOP_K, reasoning effort 등
 │   └── guard/               ★ 가드 담당만 수정
@@ -32,7 +33,7 @@ baseline/
 ```
 
 **규칙**
-- 파트 코드는 `async def handle(req: dict, kb) -> dict` 인터페이스만 지키면 내부는 자유. 형식이 조금 틀려도 `schema.py`가 규격대로 고쳐서 내보내므로 **형식 오류로 0점 나는 일은 없다.**
+- 파트 코드는 `async def handle(req: dict, kb, ...) -> dict` 인터페이스만 지키면 내부는 자유. 형식이 조금 틀려도 `schema.py`가 규격대로 고쳐서 내보내므로 **형식 오류로 0점 나는 일은 없다.**
 - 가드 2명은 `check_input` / `check_output` 함수를 나눠 맡으면 충돌이 없다 (프롬프트도 `INPUT_*` / `OUTPUT_*` 로 분리).
 - `app/common/`, `app/main.py` 수정은 팀에 공유 후 진행 (양쪽 점수에 영향). 검색 개선(임베딩 등)은 `kb.py`의 `search()` 인터페이스를 유지한 채 바꾼다.
 - 파트별 튜닝 값은 각자 `config.py` 또는 환경변수(`TUTOR_*`, `GUARD_*`)로 바꾼다.
@@ -84,7 +85,7 @@ python scripts/eval_public.py --part guard --token "$SERVER_TOKEN"
 
 | 파트 | 현재 | 우선 개선 (TODO) |
 |---|---|---|
-| 튜터 | BM25 top5 → LLM 1회로 action·answer·citations 생성, 인용은 KB 실존 ID만 | 공개 라벨로 action 기준 보정, 인용 개수 줄이기(정밀도), 퀵버튼 첫 발화 처리, 임베딩 검색 |
+| 튜터 | BM25+임베딩 RRF top5 → LLM으로 action·answer·citations 생성, 인용은 KB 실존 ID만 | 공개 라벨로 action 기준 보정, 인용 개수 줄이기(정밀도), 퀵버튼 첫 발화 처리 |
 | 가드-입력 | LLM 범주 분류 → `policy.py` 정책표로 allow/block | **`analyze_guard_labels.py` 로 정책표 확정 (현재 미검증 초안)**, 범주 정의를 라벨 기반으로 재작성 |
 | 가드-답변 | 근거 검색 + LLM 판정, unsupported 는 후보 답변 원문으로 위치 복원 | grounded 기준 보정, 구간 단위(문장/구) 맞추기 |
 | 공통 | 오류·25초 초과 시 규격 fallback, 본문 미로깅 | 임베딩 하이브리드 검색, 지연 시간 측정 |
@@ -107,6 +108,41 @@ bash scripts/run_experiment.sh \
 - 64 동시성, 형식, 인증, 리다이렉트, 각 평가의 형식·판정 오류가 한 번이라도 발생하면 즉시 실패합니다.
 - 총점 중위값 승격 폭은 `Δ=3`입니다. total은 올랐지만 guard가 떨어지거나, tutor가 오르지 않은 상태에서 guard만 4.2점 이상 오르면 `review_required`로 멈춥니다.
 - 요청·응답 본문은 저장하지 않습니다. `/tmp`에는 숫자 집계와 서버 메타 로그만 잠시 두고 종료 시 삭제합니다.
-- `scripts/publish_experiment_result.sh`가 현재 후보 브랜치에 `experiment-reports/<id>.json`만 커밋·push합니다. `main`/`champion`에는 직접 push하지 않습니다.
+- `scripts/publish_experiment_result.sh`가 `exp-result-<id>/`의 수치 결과와 `report.json`을 현재 후보 브랜치에 커밋·push합니다. 같은 폴더의 `logs/`는 런박스에 남지만 Git에는 올라가지 않습니다. `main`/`champion`에는 직접 push하지 않습니다.
 
 상세 운영 지침은 로컬 전용 `.docs/experiment-loop.md`를 확인하세요.
+
+실험 매크로는 시작 시 `fastapi`, `uvicorn`, `openai`, `httpx`를 확인합니다. 하나라도
+없으면 `requirements.txt`에 선언된 의존성만 설치하고, 이미 설치되어 있으면 설치를
+건너뜁니다.
+
+후보가 커밋된 뒤 `scripts/evaluate_current_candidate.sh`를 실행하면 KST 시각+커밋 해시의
+실험 ID, 최신 커밋 제목의 가설, 변경 경로 기반 범위를 자동으로 생성해 실험 매크로를 호출합니다.
+
+### 실험 진행 대시보드
+
+실험을 실행하기 전 별도 터미널에서 다음을 실행하면 64 동시성 검사 상태와 10회
+채점 표(회차별 정답·부분 점수·오답·형식 오류·총점·tutor·guard)를 실시간으로 볼 수 있다.
+
+```bash
+python3 scripts/experiment_dashboard.py
+```
+
+`c`/`h`로 candidate/champion 표를 전환하고 `q`로 화면만 닫는다. 상태 파일에는 수치와
+단계만 기록하며 요청·응답 본문이나 비밀값은 표시·저장하지 않는다. 상세 내용은 로컬 전용
+`.docs/experiment-loop.md`를 참고한다.
+
+### 튜터 하이브리드 검색 실험
+
+튜터는 BM25와 `text-embedding-3-small`의 코사인 유사도 순위를 RRF로 합친다. 기본값은
+1,536차원이며 KB 임베딩은 서버 시작 때 한 번만 만든다. 요청별 질문 벡터는 메모리에서만
+사용하며 저장하거나 로그로 남기지 않는다. 가드는 이 실험의 영향을 받지 않도록 기존 BM25
+검색을 유지한다. 임베딩 API 초기화·호출이 실패하면 서버를 멈추지 않고 튜터도 기존 BM25
+경로로 자동 복귀한다.
+
+512차원은 성능·안정성 비교를 위한 별도 후보에서만 다음처럼 설정한다. 같은 후보에서 다른
+검색 변경과 함께 비교하지 않는다.
+
+```bash
+export TUTOR_EMBEDDING_DIMENSIONS=512
+```

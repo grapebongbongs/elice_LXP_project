@@ -24,6 +24,7 @@ from app.common.schema import (
     normalize_request,
     tutor_fallback,
 )
+from app.tutor.retrieval import TutorRetriever
 
 MAX_BODY = 256 * 1024
 STATE: dict = {}
@@ -33,11 +34,19 @@ STATE: dict = {}
 async def lifespan(app: FastAPI):
     # 색인 같은 준비 작업은 서버 시작 때 끝낸다
     STATE["kb"] = KnowledgeBase(config.KB_DIR)
+    # 가드는 기존 BM25를 유지한다. 임베딩은 튜터 경로에서만 사용한다.
+    retriever = TutorRetriever(STATE["kb"])
+    STATE["tutor_retriever"] = retriever
+    await retriever.initialize()
     if not config.SERVER_TOKEN:
         print("[server] WARNING: SERVER_TOKEN 미설정 - 인증 없이 동작합니다 (로컬 테스트용)")
     if config.LLM_MOCK:
         print("[server] LLM_MOCK=1 - LLM 호출 없이 fallback 응답만 냅니다")
-    yield
+    try:
+        yield
+    finally:
+        await retriever.close()
+        STATE.pop("tutor_retriever", None)
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -73,7 +82,9 @@ async def _serve(request: Request, part: str) -> JSONResponse:
     err = ""
     try:
         if part == "tutor":
-            raw = await asyncio.wait_for(tutor.handle(req, kb), timeout=config.REQUEST_DEADLINE)
+            raw = await asyncio.wait_for(
+                tutor.handle(req, kb, STATE.get("tutor_retriever")), timeout=config.REQUEST_DEADLINE
+            )
             resp = enforce_tutor(raw, valid_ids=set(kb.sections) or None)
         else:
             raw = await asyncio.wait_for(guard.handle(req, kb), timeout=config.REQUEST_DEADLINE)

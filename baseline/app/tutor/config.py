@@ -6,6 +6,14 @@ SECTION_MAX_CHARS = int(os.getenv("TUTOR_SECTION_CHARS", "3000"))
 REASONING_EFFORT = os.getenv("TUTOR_REASONING_EFFORT", "low")  # minimal|low|medium (생성)
 MAX_TOKENS = int(os.getenv("TUTOR_MAX_TOKENS", "2000"))
 
+# 튜터 전용 하이브리드 검색. 기본 1536은 text-embedding-3-small의 기본 차원이다.
+# 512 비교는 별도 후보 실험에서만 TUTOR_EMBEDDING_DIMENSIONS=512로 실행한다.
+EMBEDDING_ENABLED = os.getenv("TUTOR_EMBEDDING_ENABLED", "1") == "1"
+EMBEDDING_DIMENSIONS = int(os.getenv("TUTOR_EMBEDDING_DIMENSIONS", "1536"))
+HYBRID_BM25_K = int(os.getenv("TUTOR_HYBRID_BM25_K", "10"))
+HYBRID_DENSE_K = int(os.getenv("TUTOR_HYBRID_DENSE_K", "10"))
+HYBRID_RRF_K = int(os.getenv("TUTOR_HYBRID_RRF_K", "60"))
+
 # 1단계 분류
 CLASSIFY_REASONING_EFFORT = os.getenv("TUTOR_CLASSIFY_REASONING_EFFORT", "low")
 CLASSIFY_MAX_TOKENS = int(os.getenv("TUTOR_CLASSIFY_MAX_TOKENS", "1500"))

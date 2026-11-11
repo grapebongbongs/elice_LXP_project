@@ -20,6 +20,7 @@ from app.common.normalize import compact, normalize_messages, normalize_text
 from app.common.schema import GUARD_CATEGORIES, tutor_fallback
 from app.tutor import config as C
 from app.tutor import prompts
+from app.tutor.retrieval import TutorRetriever
 
 # 공개 라벨(public/tutor.jsonl)의 범주 → action 대응. harmful_content 는 harm_type 으로 분기.
 TUTOR_MAP = {
@@ -71,10 +72,10 @@ async def korean_query(text: str) -> str:
     return q.strip() if isinstance(q, str) else ""
 
 
-async def retrieve(messages: list[dict], kb: KnowledgeBase):
-    """BM25 검색. 영어 위주 질문이면 한국어 검색어로 한 번 더 찾아 앞에 합친다."""
+async def retrieve(messages: list[dict], kb: KnowledgeBase, retriever: TutorRetriever | None = None):
+    """튜터 전용 하이브리드 검색. 비활성/오류 때는 기존 BM25로 자동 복귀한다."""
     query = build_query(messages)
-    hits = kb.search(query, k=C.TOP_K)
+    hits = await retriever.search(query, k=C.TOP_K) if retriever else kb.search(query, k=C.TOP_K)
     users = [m["content"] for m in messages if m.get("role") == "user" and m.get("content")]
     last = users[-1] if users else ""
     if C.ENGLISH_QUERY_RATIO > 0 and english_ratio(last) >= C.ENGLISH_QUERY_RATIO:
@@ -84,7 +85,8 @@ async def retrieve(messages: list[dict], kb: KnowledgeBase):
             log_error("tutor.query_ko", e)
             ko = ""
         if ko:
-            ko_hits = kb.search(f"{ko} {ko} {query}", k=C.TOP_K)
+            ko_query = f"{ko} {ko} {query}"
+            ko_hits = await retriever.search(ko_query, k=C.TOP_K) if retriever else kb.search(ko_query, k=C.TOP_K)
             seen = {s.id for s, _ in ko_hits}
             hits = (ko_hits + [(s, sc) for s, sc in hits if s.id not in seen])[: C.TOP_K]
     return hits
@@ -188,13 +190,13 @@ async def generate(action: str, messages: list[dict], hits) -> dict | None:
     )
 
 
-async def handle(req: dict, kb: KnowledgeBase) -> dict:
+async def handle(req: dict, kb: KnowledgeBase, retriever: TutorRetriever | None = None) -> dict:
     messages = normalize_messages(req["messages"])
     if not messages:
         return tutor_fallback()
 
-    # 검색(BM25, 수 ms)을 먼저 하고 그 자료를 분류에도 넣는다 → 자료에 없는 질문(out_of_material) 판별
-    hits = await retrieve(messages, kb)
+    # 검색을 먼저 하고 그 자료를 분류에도 넣는다 → 자료에 없는 질문(out_of_material) 판별
+    hits = await retrieve(messages, kb, retriever)
     cls_task = asyncio.create_task(classify(messages, hits))
     try:
         category, harm_type = await cls_task
