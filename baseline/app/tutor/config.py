@@ -11,7 +11,7 @@ MAX_TOKENS = int(os.getenv("TUTOR_MAX_TOKENS", "2000"))
 EMBEDDING_ENABLED = os.getenv("TUTOR_EMBEDDING_ENABLED", "1") == "1"
 EMBEDDING_DIMENSIONS = int(os.getenv("TUTOR_EMBEDDING_DIMENSIONS", "1536"))
 HYBRID_BM25_K = int(os.getenv("TUTOR_HYBRID_BM25_K", "10"))
-HYBRID_DENSE_K = int(os.getenv("TUTOR_HYBRID_DENSE_K", "10"))
+HYBRID_DENSE_K = int(os.getenv("TUTOR_HYBRID_DENSE_K", "3"))
 HYBRID_RRF_K = int(os.getenv("TUTOR_HYBRID_RRF_K", "60"))
 
 # 1단계 분류
