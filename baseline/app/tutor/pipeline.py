@@ -184,6 +184,18 @@ def locate_quote(quote, hits) -> str | None:
     return best_id if best_cov >= C.QUOTE_MIN_COVERAGE else None
 
 
+# '정답만' 표지: 풀이 없이 답만 달라는 표현. 공개 세트 answer_seeking 12건 전부에 있고 다른 388건에는 없다.
+_ANSWER_ONLY = re.compile(
+    r"정답만|답만|설명\s*없이|풀이\s*없이|설명은?\s*빼고|without\s+(any\s+)?explanation|answer\s+only|just\s+(the\s+)?answer|only\s+the\s+answer|hint.{0,10}없이|check.{0,10}없이",
+    re.I,
+)
+
+
+def answer_only_marker(messages: list[dict]) -> bool:
+    users = [m.get("content", "") for m in messages if m.get("role") == "user"]
+    return bool(users) and bool(_ANSWER_ONLY.search(users[-1] or ""))
+
+
 # ---------------------------------------------------------------- 2단계: 생성
 async def generate(action: str, messages: list[dict], hits) -> dict | None:
     user = prompts.GEN_USER.format(
@@ -209,6 +221,8 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
         log_error("tutor.classify", e)
         category, harm_type = "normal", None
 
+    if C.ANSWER_ONLY_MARKER and category in ("normal", "answer_seeking"):
+        category = "answer_seeking" if answer_only_marker(messages) else "normal"
     action = decide_action(category, harm_type)
     if action not in GENERATED:
         return template_answer(action, category, harm_type)

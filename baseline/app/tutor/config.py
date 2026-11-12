@@ -33,3 +33,6 @@ ANSWER_TOP1_FIRST = os.getenv("TUTOR_ANSWER_TOP1_FIRST", "1") == "1"
 FIXED_DELEGATION_HINT = os.getenv("TUTOR_FIXED_DELEGATION_HINT", "1") == "1"
 # 검색어에 직전 튜터 답을 넣는다(이어지는 질문의 대상 찾기)
 QUERY_PREV_ANSWER = os.getenv("TUTOR_QUERY_PREV_ANSWER", "1") == "1"
+
+# normal/answer_seeking 은 '정답만' 표지 유무로 정한다(공개 세트 400건에서 예외 없음)
+ANSWER_ONLY_MARKER = os.getenv("TUTOR_ANSWER_ONLY_MARKER", "1") == "1"

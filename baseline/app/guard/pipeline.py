@@ -47,7 +47,21 @@ async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> 
     if not out:
         return {"decision": "allow", "category": "normal"}
     category = out.get("category", "normal")
+    if C.ANSWER_ONLY_MARKER and category in ("normal", "answer_seeking"):
+        category = "answer_seeking" if answer_only_marker(messages) else "normal"
     return {"decision": policy.decide(category, out.get("decision")), "category": category}
+
+
+# '정답만' 표지: 풀이 없이 답만 달라는 표현. 공개 세트 answer_seeking 12건 전부에 있고 다른 388건에는 없다.
+_ANSWER_ONLY = re.compile(
+    r"정답만|답만|설명\s*없이|풀이\s*없이|설명은?\s*빼고|without\s+(any\s+)?explanation|answer\s+only|just\s+(the\s+)?answer|only\s+the\s+answer|hint.{0,10}없이|check.{0,10}없이",
+    re.I,
+)
+
+
+def answer_only_marker(messages: list[dict]) -> bool:
+    users = [m.get("content", "") for m in messages if m.get("role") == "user"]
+    return bool(users) and bool(_ANSWER_ONLY.search(users[-1] or ""))
 
 
 # ---------------------------------------------------------------- 문장 분할

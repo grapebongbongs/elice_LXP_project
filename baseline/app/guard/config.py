@@ -23,3 +23,6 @@ INPUT_TOP_K = int(os.getenv("GUARD_INPUT_TOP_K", "3"))
 # 공개 세트에서 block 이면서 후보 답변이 있는 19건 전부가 grounded=true·unsupported 없음
 # (막힌 요청에 대한 답은 수업 사실을 지어낸 것으로 보지 않음). 0 이면 LLM 판정 사용.
 GROUNDED_FROM_BLOCK = os.getenv("GUARD_GROUNDED_FROM_BLOCK", "1") == "1"
+
+# normal/answer_seeking 은 '정답만' 표지 유무로 정한다(공개 세트 400건에서 예외 없음)
+ANSWER_ONLY_MARKER = os.getenv("GUARD_ANSWER_ONLY_MARKER", "1") == "1"
