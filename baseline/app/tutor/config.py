@@ -26,3 +26,10 @@ ENGLISH_QUERY_RATIO = float(os.getenv("TUTOR_ENGLISH_QUERY_RATIO", "0.5"))
 # 없으면 지어낸 답으로 보고 abstain 으로 바꾼다. 있으면 그 문장이 든 섹션을 인용한다. (0 이면 끔)
 QUOTE_CHECK = os.getenv("TUTOR_QUOTE_CHECK", "1") == "1"
 QUOTE_MIN_COVERAGE = float(os.getenv("TUTOR_QUOTE_MIN_COVERAGE", "0.8"))  # quote 글자 bigram 중 섹션에 있는 비율
+
+# answer 를 검색 1위 섹션 하나로 먼저 생성(근거 문장을 못 찾으면 상위 TOP_K 로 재생성)
+ANSWER_TOP1_FIRST = os.getenv("TUTOR_ANSWER_TOP1_FIRST", "1") == "1"
+# academic_dishonesty 는 고정 힌트 문장으로 응대(LLM 생성 없음)
+FIXED_DELEGATION_HINT = os.getenv("TUTOR_FIXED_DELEGATION_HINT", "1") == "1"
+# 검색어에 직전 튜터 답을 넣는다(이어지는 질문의 대상 찾기)
+QUERY_PREV_ANSWER = os.getenv("TUTOR_QUERY_PREV_ANSWER", "1") == "1"

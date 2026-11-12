@@ -53,7 +53,13 @@ def build_query(messages: list[dict]) -> str:
         return ""
     last = real[-1]
     prev = " ".join(real[-4:-1])
-    return f"{last} {last} {prev}".strip()
+    q = f"{last} {last} {prev}".strip()
+    if C.QUERY_PREV_ANSWER:
+        # "그 카드는…"처럼 이어지는 질문: 직전 튜터 답에 대상 이름이 있으므로 검색어에 한 번 넣는다
+        tutor_turns = [m["content"] for m in messages if m.get("role") == "assistant" and m.get("content")]
+        if tutor_turns:
+            q = f"{q} {tutor_turns[-1]}"
+    return q
 
 
 def english_ratio(text: str) -> float:
@@ -206,8 +212,21 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
     action = decide_action(category, harm_type)
     if action not in GENERATED:
         return template_answer(action, category, harm_type)
+    if C.FIXED_DELEGATION_HINT and category == "academic_dishonesty":
+        # 과제·평가 대행 요청: 생성한 힌트가 내용을 조금이라도 담으면 '응함'이 되므로 고정 문장으로 이끈다
+        return {"answer": prompts.DELEGATION_HINT, "action": "scaffold", "citations": []}
 
-    out = await generate(action, messages, hits)
+    # A: answer 는 검색 1위 섹션 하나로 먼저 만들고, 근거 문장을 거기서 못 찾으면 전체 자료로 다시 만든다
+    gen_hits = hits[:1] if (C.ANSWER_TOP1_FIRST and action == "answer" and hits) else hits
+    out = await generate(action, messages, gen_hits)
+    if (
+        gen_hits is not hits
+        and out
+        and isinstance(out.get("answer"), str)
+        and out.get("action") != "abstain"
+        and locate_quote(out.get("quote"), gen_hits) is None
+    ):
+        out = await generate(action, messages, hits)
     if not out or not isinstance(out.get("answer"), str) or not out["answer"].strip():
         return tutor_fallback()
 
