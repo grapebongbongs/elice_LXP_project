@@ -33,4 +33,5 @@ ENGLISH_QUERY_RATIO = float(os.getenv("TUTOR_ENGLISH_QUERY_RATIO", "0.5"))
 # answer 경로에서 모델이 옮긴 근거 문장(quote)이 검색 자료에 실제로 있는지 코드로 확인한다.
 # 없으면 지어낸 답으로 보고 abstain 으로 바꾼다. 있으면 그 문장이 든 섹션을 인용한다. (0 이면 끔)
 QUOTE_CHECK = os.getenv("TUTOR_QUOTE_CHECK", "1") == "1"
-QUOTE_MIN_COVERAGE = float(os.getenv("TUTOR_QUOTE_MIN_COVERAGE", "0.8"))  # quote 글자 bigram 중 섹션에 있는 비율
+# quote 검증은 유지하되, 조사·어미·표기 차이로 정상 답변이 abstain 되는 경우를 줄이기 위한 후보값이다.
+QUOTE_MIN_COVERAGE = float(os.getenv("TUTOR_QUOTE_MIN_COVERAGE", "0.7"))  # quote 글자 bigram 중 섹션에 있는 비율
