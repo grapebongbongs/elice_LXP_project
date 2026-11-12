@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Commit and push numeric experiment artifacts from one candidate branch.
+# Commit and push numeric experiment artifacts from a candidate branch.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,8 +11,9 @@ usage() {
 Usage:
   publish_experiment_result.sh [--result-dir <exp-result-id>] [--report <report.json>] [--remote origin]
 
-Without --result-dir and --report, publish the only repository-root exp-result-* directory
-that contains report.json. If more than one exists, specify --result-dir explicitly.
+Without --result-dir and --report, publish every unrecorded repository-root exp-result-*
+directory that contains report.json in one commit. Already recorded result directories are
+skipped. Use --result-dir or --report to publish exactly one result instead.
 EOF
 }
 
@@ -31,38 +32,35 @@ done
 
 cd "$ROOT_DIR"
 
+is_recorded_result() {
+  local result_dir="$1"
+  local result_rel="${result_dir#"$ROOT_DIR"/}"
+  git ls-files --error-unmatch "$result_rel/report.json" >/dev/null 2>&1
+}
+
 if [[ -z "$REPORT" && -z "$RESULT_DIR" ]]; then
   CANDIDATES=()
   while IFS= read -r candidate; do CANDIDATES+=("$candidate"); done < <(
     find "$ROOT_DIR" -mindepth 1 -maxdepth 1 -type d -name 'exp-result-*' -print | sort | while IFS= read -r candidate; do
-      [[ -f "$candidate/report.json" ]] && printf '%s\n' "$candidate"
+      [[ -f "$candidate/report.json" ]] || continue
+      is_recorded_result "$candidate" || printf '%s\n' "$candidate"
     done
   )
   if [[ "${#CANDIDATES[@]}" -eq 0 ]]; then
-    echo "No exp-result-* directory with report.json was found; provide --result-dir" >&2
-    exit 2
+    echo "No unrecorded exp-result-* directory with report.json was found"
+    exit 0
   fi
-  if [[ "${#CANDIDATES[@]}" -ne 1 ]]; then
-    echo "Multiple completed result directories found; choose one with --result-dir:" >&2
-    printf '  %s\n' "${CANDIDATES[@]}" >&2
-    exit 2
-  fi
-  RESULT_DIR="${CANDIDATES[0]}"
+else
+  if [[ -n "$REPORT" && -z "$RESULT_DIR" ]]; then RESULT_DIR="$(dirname "$REPORT")"; fi
+  if [[ -n "$RESULT_DIR" && -z "$REPORT" ]]; then REPORT="$RESULT_DIR/report.json"; fi
+  [[ -n "$REPORT" && -f "$REPORT" ]] || { echo "--report must name an existing report.json file" >&2; exit 2; }
+  [[ -n "$RESULT_DIR" && -d "$RESULT_DIR" ]] || { echo "--result-dir must name an existing directory" >&2; exit 2; }
+
+  RESULT_DIR="$(cd "$RESULT_DIR" && pwd -P)"
+  REPORT="$(cd "$(dirname "$REPORT")" && pwd -P)/$(basename "$REPORT")"
+  [[ "$REPORT" == "$RESULT_DIR/report.json" ]] || { echo "--report must be $RESULT_DIR/report.json" >&2; exit 2; }
+  CANDIDATES=("$RESULT_DIR")
 fi
-
-if [[ -n "$REPORT" && -z "$RESULT_DIR" ]]; then RESULT_DIR="$(dirname "$REPORT")"; fi
-if [[ -n "$RESULT_DIR" && -z "$REPORT" ]]; then REPORT="$RESULT_DIR/report.json"; fi
-[[ -n "$REPORT" && -f "$REPORT" ]] || { echo "--report must name an existing report.json file" >&2; exit 2; }
-[[ -n "$RESULT_DIR" && -d "$RESULT_DIR" ]] || { echo "--result-dir must name an existing directory" >&2; exit 2; }
-
-RESULT_DIR="$(cd "$RESULT_DIR" && pwd -P)"
-REPORT="$(cd "$(dirname "$REPORT")" && pwd -P)/$(basename "$REPORT")"
-
-case "$RESULT_DIR" in
-  "$ROOT_DIR"/exp-result-*) RESULT_REL="${RESULT_DIR#"$ROOT_DIR"/}" ;;
-  *) echo "--result-dir must be an exp-result-<id> directory inside the repository" >&2; exit 2 ;;
-esac
-[[ "$REPORT" == "$RESULT_DIR/report.json" ]] || { echo "--report must be $RESULT_REL/report.json" >&2; exit 2; }
 
 BRANCH="$(git branch --show-current)"
 [[ -n "$BRANCH" ]] || { echo "Detached HEAD cannot publish a result" >&2; exit 2; }
@@ -70,17 +68,42 @@ BRANCH="$(git branch --show-current)"
 git diff --quiet || { echo "Tracked changes exist before publishing" >&2; exit 2; }
 git diff --cached --quiet || { echo "Staged changes exist before publishing" >&2; exit 2; }
 
-python3 "$METRICS" validate-report --report "$REPORT"
-EXPERIMENT_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["experiment_id"])' "$REPORT")"
-[[ "$RESULT_REL" == "exp-result-${EXPERIMENT_ID}" ]] || { echo "Result directory does not match report experiment_id" >&2; exit 2; }
-echo "[publish] selected $RESULT_REL"
+RESULT_RELS=()
+EXPERIMENT_IDS=()
+for candidate in "${CANDIDATES[@]}"; do
+  candidate="$(cd "$candidate" && pwd -P)"
+  case "$candidate" in
+    "$ROOT_DIR"/exp-result-*) result_rel="${candidate#"$ROOT_DIR"/}" ;;
+    *) echo "--result-dir must be an exp-result-<id> directory inside the repository" >&2; exit 2 ;;
+  esac
+  report="$candidate/report.json"
+  [[ -f "$report" ]] || { echo "--report must name an existing report.json file" >&2; exit 2; }
+  python3 "$METRICS" validate-report --report "$report"
+  experiment_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["experiment_id"])' "$report")"
+  [[ "$result_rel" == "exp-result-${experiment_id}" ]] || { echo "Result directory does not match report experiment_id: $result_rel" >&2; exit 2; }
+  RESULT_RELS+=("$result_rel")
+  EXPERIMENT_IDS+=("$experiment_id")
+done
+
+printf '[publish] selected results:\n'
+printf '  %s\n' "${RESULT_RELS[@]}"
 
 while IFS= read -r path; do
-  [[ "$path" == "$RESULT_REL/"* ]] || { echo "Unexpected untracked file: $path" >&2; exit 2; }
+  allowed=0
+  for result_rel in "${RESULT_RELS[@]}"; do
+    if [[ "$path" == "$result_rel/"* ]]; then allowed=1; break; fi
+  done
+  [[ "$allowed" -eq 1 ]] || { echo "Unexpected untracked file: $path" >&2; exit 2; }
 done < <(git ls-files --others --exclude-standard)
 
-git add -- "$RESULT_REL"
-git diff --cached --quiet && { echo "No publishable numeric artifacts found in $RESULT_REL" >&2; exit 2; }
-git commit -m "experiment: record ${EXPERIMENT_ID}"
+git add -- "${RESULT_RELS[@]}"
+git diff --cached --quiet && { echo "No publishable numeric artifacts found" >&2; exit 2; }
+if [[ "${#EXPERIMENT_IDS[@]}" -eq 1 ]]; then
+  commit_message="experiment: record ${EXPERIMENT_IDS[0]}"
+else
+  commit_message="experiment: record ${#EXPERIMENT_IDS[@]} results"
+fi
+git commit -m "$commit_message"
 git push "$REMOTE" "HEAD:refs/heads/${BRANCH}"
-echo "Published experiment artifacts: ${BRANCH}:${RESULT_REL}"
+echo "Published experiment artifacts on ${BRANCH}:"
+printf '  %s\n' "${RESULT_RELS[@]}"
