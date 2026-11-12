@@ -110,6 +110,20 @@ def precheck(args: argparse.Namespace) -> None:
     })
 
 
+def screen(args: argparse.Namespace) -> None:
+    """Decide whether a short candidate screen warrants the remaining runs."""
+    candidate, baseline = summary(read_json(args.candidate)), summary(read_json(args.baseline))
+    candidate_median = candidate["total"]["median"]
+    baseline_median = baseline["total"]["median"]
+    continue_full_runs = candidate_median >= baseline_median - args.early_stop_margin
+    write_json(args.output, {
+        "candidate_total_median": candidate_median,
+        "screen_baseline_total_median": baseline_median,
+        "early_stop_margin": args.early_stop_margin,
+        "continue_full_runs": continue_full_runs,
+    })
+
+
 def decide(args: argparse.Namespace) -> None:
     candidate, champion = summary(read_json(args.candidate)), summary(read_json(args.champion))
     differences = {key: round(candidate[key]["median"] - champion[key]["median"], 4)
@@ -167,6 +181,7 @@ def main() -> int:
     p = subs.add_parser("parse-load"); p.add_argument("--input", required=True); p.add_argument("--output", required=True); p.set_defaults(func=parse_load)
     p = subs.add_parser("summarize"); p.add_argument("--runs", required=True); p.add_argument("--output", required=True); p.add_argument("--expected-runs", type=int, default=10); p.set_defaults(func=summarize_runs)
     p = subs.add_parser("precheck"); p.add_argument("--candidate", required=True); p.add_argument("--champion", required=True); p.add_argument("--potential-margin", type=float, default=3.0); p.add_argument("--output", required=True); p.set_defaults(func=precheck)
+    p = subs.add_parser("screen"); p.add_argument("--candidate", required=True); p.add_argument("--baseline", required=True); p.add_argument("--early-stop-margin", type=float, default=2.0); p.add_argument("--output", required=True); p.set_defaults(func=screen)
     p = subs.add_parser("decide"); p.add_argument("--candidate", required=True); p.add_argument("--champion", required=True); p.add_argument("--delta", type=float, default=3.0); p.add_argument("--guard-review-multiplier", type=float, default=1.4); p.add_argument("--output", required=True); p.set_defaults(func=decide)
     p = subs.add_parser("report"); p.add_argument("--experiment-id", required=True); p.add_argument("--base-commit", required=True); p.add_argument("--candidate-commit", required=True); p.add_argument("--scope", choices=("tutor", "guard", "common"), required=True); p.add_argument("--hypothesis", required=True); p.add_argument("--load-test", required=True); p.add_argument("--candidate", required=True); p.add_argument("--champion"); p.add_argument("--decision", required=True); p.add_argument("--output", required=True); p.set_defaults(func=report)
     p = subs.add_parser("validate-report"); p.add_argument("--report", required=True); p.set_defaults(func=validate_report)

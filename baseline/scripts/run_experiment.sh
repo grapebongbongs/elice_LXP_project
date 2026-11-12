@@ -14,11 +14,14 @@ usage() {
 Usage:
   bash baseline/scripts/run_experiment.sh \
     --id 20261111-001 --scope guard --hypothesis "..." \
-    [--champion-ref origin/main] [--champion-summary experiment-reports/champion.json] [--status-file /tmp/kosa-experiment-status.json]
+    [--screen-baseline path/to/candidate-summary.json] [--screen-runs 5] \
+    [--early-stop-margin 2] [--champion-ref origin/main] \
+    [--champion-summary experiment-reports/champion.json] [--status-file /tmp/kosa-experiment-status.json]
 
 Run this only from a clean, committed candidate branch. It uses one checkout and
-one server at a time. It performs a real 64-request validation, ten candidate
-runs, and ten champion runs only when the candidate is within the broad range.
+one server at a time. It performs a real 64-request validation, five candidate
+screening runs, then the remaining five only when the candidate is not clearly
+below --screen-baseline. Champion comparison still uses ten runs.
 EOF
 }
 
@@ -28,6 +31,9 @@ HYPOTHESIS=""
 CHAMPION_REF="origin/main"
 CHAMPION_SUMMARY="experiment-reports/champion.json"
 RUNS=10
+SCREEN_RUNS=5
+EARLY_STOP_MARGIN=2
+SCREEN_BASELINE=""
 DELTA=3
 POTENTIAL_MARGIN=3
 GUARD_REVIEW_MULTIPLIER=1.4
@@ -43,6 +49,9 @@ while [[ $# -gt 0 ]]; do
     --champion-ref) CHAMPION_REF="$2"; shift 2 ;;
     --champion-summary) CHAMPION_SUMMARY="$2"; shift 2 ;;
     --runs) RUNS="$2"; shift 2 ;;
+    --screen-runs) SCREEN_RUNS="$2"; shift 2 ;;
+    --screen-baseline) SCREEN_BASELINE="$2"; shift 2 ;;
+    --early-stop-margin) EARLY_STOP_MARGIN="$2"; shift 2 ;;
     --delta) DELTA="$2"; shift 2 ;;
     --potential-margin) POTENTIAL_MARGIN="$2"; shift 2 ;;
     --guard-review-multiplier) GUARD_REVIEW_MULTIPLIER="$2"; shift 2 ;;
@@ -58,6 +67,9 @@ done
 [[ -n "$EXPERIMENT_ID" && -n "$SCOPE" && -n "$HYPOTHESIS" ]] || { usage >&2; exit 2; }
 [[ "$SCOPE" == "tutor" || "$SCOPE" == "guard" || "$SCOPE" == "common" ]] || { echo "Invalid scope" >&2; exit 2; }
 [[ "$RUNS" =~ ^[1-9][0-9]*$ ]] || { echo "--runs must be positive" >&2; exit 2; }
+[[ "$SCREEN_RUNS" =~ ^[1-9][0-9]*$ && "$SCREEN_RUNS" -le "$RUNS" ]] || { echo "--screen-runs must be between 1 and --runs" >&2; exit 2; }
+[[ "$EARLY_STOP_MARGIN" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "--early-stop-margin must be non-negative" >&2; exit 2; }
+[[ -z "$SCREEN_BASELINE" || -f "$SCREEN_BASELINE" ]] || { echo "--screen-baseline must name an existing JSON file" >&2; exit 2; }
 [[ "$EXPERIMENT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "--id must use only letters, digits, dot, underscore, or hyphen" >&2; exit 2; }
 
 missing_dependency=0
@@ -150,12 +162,12 @@ run_load_test() {
 }
 
 run_score_series() {
-  local label="$1"
+  local label="$1" start_run="$2" end_run="$3"
   local runs_file="$RESULT_DIR/${label}-runs.jsonl"
-  : >"$runs_file"
-  status_update --phase "${label}_scoring" --active-series "$label" --current-run 1 --server stopped
+  if [[ "$start_run" == "1" ]]; then : >"$runs_file"; fi
+  status_update --phase "${label}_scoring" --active-series "$label" --current-run "$start_run" --server stopped
   start_server "$RESULT_DIR/logs/${label}-server.log"
-  for i in $(seq 1 "$RUNS"); do
+  for i in $(seq "$start_run" "$end_run"); do
     local score_log="$RESULT_DIR/logs/${label}-${i}.log"
     status_update --phase "${label}_scoring" --active-series "$label" --current-run "$i" --server running
     if ! python3 "$ROOT_DIR/harness/score_local.py" \
@@ -181,8 +193,7 @@ run_score_series() {
     fi
   done
   stop_server
-  python3 "$METRICS" summarize --runs "$runs_file" --expected-runs "$RUNS" --output "$RESULT_DIR/${label}-summary.json"
-  status_update --phase "${label}_complete" --active-series "$label" --current-run "$RUNS" --server stopped
+  status_update --phase "${label}_complete" --active-series "$label" --current-run "$end_run" --server stopped
 }
 
 restore_candidate() {
@@ -191,21 +202,47 @@ restore_candidate() {
 
 echo "[experiment] candidate ${ORIGINAL_HEAD}: validating 64 concurrent requests"
 run_load_test
-echo "[experiment] candidate: running ${RUNS} public-set evaluations"
-run_score_series candidate
+echo "[experiment] candidate: running ${SCREEN_RUNS} public-set screening evaluations"
+run_score_series candidate 1 "$SCREEN_RUNS"
+SCREEN_SUMMARY="$RESULT_DIR/candidate-screen-summary.json"
+python3 "$METRICS" summarize --runs "$RESULT_DIR/candidate-runs.jsonl" --expected-runs "$SCREEN_RUNS" --output "$SCREEN_SUMMARY"
+
+EARLY_STOPPED=0
+if [[ "$SCREEN_RUNS" -lt "$RUNS" && -n "$SCREEN_BASELINE" ]]; then
+  SCREENING_FILE="$RESULT_DIR/candidate-screening.json"
+  python3 "$METRICS" screen --candidate "$SCREEN_SUMMARY" --baseline "$SCREEN_BASELINE" --early-stop-margin "$EARLY_STOP_MARGIN" --output "$SCREENING_FILE"
+  CONTINUE_FULL_RUNS="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["continue_full_runs"]).lower())' "$SCREENING_FILE")"
+  if [[ "$CONTINUE_FULL_RUNS" != "true" ]]; then
+    cp "$SCREEN_SUMMARY" "$RESULT_DIR/candidate-summary.json"
+    python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); json.dump({"decision":"early_stop_below_screen_baseline","screening":s}, open(sys.argv[2], "w"), ensure_ascii=False, indent=2); open(sys.argv[2], "a").write("\n")' "$SCREENING_FILE" "$RESULT_DIR/decision.json"
+    EARLY_STOPPED=1
+    echo "[experiment] candidate stopped after ${SCREEN_RUNS} runs: below screen baseline"
+  fi
+fi
+
+if [[ "$EARLY_STOPPED" == "0" ]]; then
+  if [[ "$SCREEN_RUNS" -lt "$RUNS" ]]; then
+    echo "[experiment] candidate passed screening: running remaining $((RUNS - SCREEN_RUNS)) evaluations"
+    run_score_series candidate "$((SCREEN_RUNS + 1))" "$RUNS"
+  fi
+  python3 "$METRICS" summarize --runs "$RESULT_DIR/candidate-runs.jsonl" --expected-runs "$RUNS" --output "$RESULT_DIR/candidate-summary.json"
+fi
 
 DECISION_FILE="$RESULT_DIR/decision.json"
 CHAMPION_FILE=""
-if [[ -f "$CHAMPION_SUMMARY" ]]; then
+if [[ "$EARLY_STOPPED" == "1" ]]; then
+  : # decision.json was written from the five-run screen; champion is not re-evaluated.
+elif [[ -f "$CHAMPION_SUMMARY" ]]; then
   python3 "$METRICS" precheck --candidate "$RESULT_DIR/candidate-summary.json" --champion "$CHAMPION_SUMMARY" \
     --potential-margin "$POTENTIAL_MARGIN" --output "$RESULT_DIR/precheck.json"
   SHOULD_REEVALUATE="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["reevaluate_champion"]).lower())' "$RESULT_DIR/precheck.json")"
   if [[ "$SHOULD_REEVALUATE" == "true" ]]; then
     echo "[experiment] within broad range: re-evaluating ${CHAMPION_REF}"
     git switch --detach "$CHAMPION_REF" >/dev/null
-    if ! run_score_series champion; then restore_candidate; exit 1; fi
+    if ! run_score_series champion 1 "$RUNS"; then restore_candidate; exit 1; fi
     restore_candidate
     CHAMPION_FILE="$RESULT_DIR/champion-summary.json"
+    python3 "$METRICS" summarize --runs "$RESULT_DIR/champion-runs.jsonl" --expected-runs "$RUNS" --output "$CHAMPION_FILE"
     python3 "$METRICS" decide --candidate "$RESULT_DIR/candidate-summary.json" --champion "$CHAMPION_FILE" \
       --delta "$DELTA" --guard-review-multiplier "$GUARD_REVIEW_MULTIPLIER" --output "$DECISION_FILE"
   else
