@@ -11,4 +11,14 @@ venv/
 *.log
 
 # 실제 token을 적었다면 주석을 풀어 제외 (채점에는 런박스의 파일이 쓰이므로 git에 없어도 됨)
-# submission.jsonsubmission.json
+submission.json
+
+# --- 17adfc1 (private_experiment_bootcamp) 의 무시 목록
+*.env
+!.env.example
+results/
+loop/.server_*.log
+.chrome-profile/
+loop/browser/.runbox_url
+loop/browser/*.png
+loop/browser/.last_submit
