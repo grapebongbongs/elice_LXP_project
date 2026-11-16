@@ -13,10 +13,10 @@ req = {"messages": [...], "session_id": ..., "spec_version": ...}
 import asyncio
 import re
 
-from app.common import llm
+from app.common import focus, llm
 from app.common.kb import KnowledgeBase, Section, conversation_text, format_context
 from app.common.logging_util import log_error
-from app.common.normalize import compact, normalize_messages, normalize_text
+from app.common.normalize import compact, normalize_messages
 from app.common.schema import GUARD_CATEGORIES, tutor_fallback
 from app.tutor import config as C
 from app.tutor import prompts
@@ -107,19 +107,28 @@ async def classify(messages: list[dict], hits=None) -> tuple[str, str | None]:
     else:
         system = prompts.CLASSIFY_SYSTEM
         user = prompts.CLASSIFY_USER.format(conversation=conversation_text(messages))
-    out = await llm.chat_json(
-        system,
-        user,
-        reasoning_effort=C.CLASSIFY_REASONING_EFFORT,
-        max_tokens=C.CLASSIFY_MAX_TOKENS,
-        tag="tutor.classify",
-    )
-    if not out:
-        return "normal", None  # 분류 실패 시 다수 범주(normal)로 진행 — 생성 프롬프트가 2차 방어
+    async def primary():
+        try:
+            return await llm.chat_json(
+                system, user, reasoning_effort=C.CLASSIFY_REASONING_EFFORT,
+                max_tokens=C.CLASSIFY_MAX_TOKENS, tag="tutor.classify",
+            )
+        except Exception as exc:
+            log_error("tutor.classify", exc)
+            return None
+    out, checks = await asyncio.gather(primary(), focus.check(messages, C.FOCUS_NAMES))
+    out = out or {}
     category = out.get("category")
     if category not in GUARD_CATEGORIES:
         category = "normal"
     harm_type = out.get("harm_type") if out.get("harm_type") in ("hate", "actionable") else None
+    category = focus.combine(category, checks)
+    if C.HARM_TYPE_RULE and category == "harmful_content":
+        # 실행 요청 판정을 보존한다. 모욕·비하 또는 유형 누락만 redirect로 보정한다.
+        if any(checks.get(n) == "harmful_content" for n in ("privacy", "fraud")):
+            harm_type = "actionable"
+        elif harm_type is None:
+            harm_type = "hate"
     return category, harm_type
 
 
@@ -156,32 +165,45 @@ def filter_citations(raw, action: str, hits: list[tuple[Section, float]]) -> lis
 
 
 # ---------------------------------------------------------------- 근거 문장 확인
-_QUOTE_STRIP = re.compile(r"[\s|`*#>\-.,!?~·…'\"“”‘’():;]+")
-
-
-def _squash(text: str) -> str:
-    return _QUOTE_STRIP.sub("", normalize_text(text or ""))
-
-
-def _bigrams(text: str) -> set[str]:
-    return {text[i : i + 2] for i in range(len(text) - 1)}
-
-
 def locate_quote(quote, hits) -> str | None:
     """quote 가 검색된 섹션 중 어디에 있는지 찾아 섹션 id 를 돌려준다. 못 찾으면 None."""
-    q = _squash(quote) if isinstance(quote, str) else ""
+    q = quote.strip() if isinstance(quote, str) else ""
     if len(q) < 4:
         return None
-    qb = _bigrams(q)
-    best_id, best_cov = None, 0.0
     for s, _ in hits:
-        t = _squash(s.text)
-        if q in t:
+        if q in s.text:
             return s.id
-        cov = len(qb & _bigrams(t)) / len(qb)
-        if cov > best_cov:
-            best_id, best_cov = s.id, cov
-    return best_id if best_cov >= C.QUOTE_MIN_COVERAGE else None
+    return None
+
+
+def append_quote(answer: str, quote, citations: list[str], hits) -> str:
+    """인용한 섹션에 실제로 있는 원문 하나만 추가한다."""
+    if not C.APPEND_QUOTE or not isinstance(quote, str):
+        return answer
+    q = quote.strip()
+    sid = locate_quote(q, hits)
+    if sid is None or sid not in citations or q in answer:
+        return answer
+    suffix = f'\n\n자료에는 이렇게 적혀 있어요: "{q}"'
+    # 응답 규격의 4000자 절단 때문에 근거가 반만 남는 것을 막는다.
+    return answer + suffix if len(answer + suffix) <= 4000 else answer
+
+
+_NAMED_RULE = re.compile(r"[\"'“‘]([^\"'”’\n]{2,60})[\"'”’]\s*(?:이라는\s*|라는\s*)?(?:규칙|기준|등급)|([가-힣A-Za-z0-9_-]{2,30})\s+(?:규칙|기준|등급)")
+
+
+def missing_named_rule(messages: list[dict], hits) -> bool:
+    if not C.NAMED_RULE_CHECK or not hits:
+        return False
+    text = focus.last_user(messages)
+    material = compact(hits[0][0].text)
+    for match in _NAMED_RULE.finditer(text):
+        name = match.group(1) or match.group(2)
+        if name in ("어떤", "무슨", "이런", "저런", "그런", "해당"):
+            continue
+        if compact(name) not in material:
+            return True
+    return False
 
 
 # '정답만' 표지: 풀이 없이 답만 달라는 표현. 공개 세트 answer_seeking 12건 전부에 있고 다른 388건에는 없다.
@@ -211,59 +233,57 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
     messages = normalize_messages(req["messages"])
     if not messages:
         return tutor_fallback()
+    if C.LOW_SIGNAL_RULE and focus.low_signal(messages):
+        return template_answer("clarify", "low_signal_input", None)
 
-    # 검색(BM25, 수 ms)을 먼저 하고 그 자료를 분류에도 넣는다 → 자료에 없는 질문(out_of_material) 판별
     hits = await retrieve(messages, kb)
-    cls_task = asyncio.create_task(classify(messages, hits))
+    gen_hits = hits[: C.FIRST_PASS_K] if C.ANSWER_TOP1_FIRST else hits
+    # 분류 중 answer를 미리 생성한다. 다른 action이면 결과를 쓰지 않고 회수한다.
+    generation = asyncio.create_task(generate("answer", messages, gen_hits)) if C.SPECULATIVE_GENERATION else None
     try:
-        category, harm_type = await cls_task
-    except Exception as e:  # 분류 오류는 normal 로 진행
-        log_error("tutor.classify", e)
-        category, harm_type = "normal", None
-
-    if C.ANSWER_ONLY_MARKER and category in ("normal", "answer_seeking"):
-        category = "answer_seeking" if answer_only_marker(messages) else "normal"
-    action = decide_action(category, harm_type)
-    if action not in GENERATED:
-        return template_answer(action, category, harm_type)
-    if C.FIXED_DELEGATION_HINT and category == "academic_dishonesty":
-        # 과제·평가 대행 요청: 생성한 힌트가 내용을 조금이라도 담으면 '응함'이 되므로 고정 문장으로 이끈다
-        return {"answer": prompts.DELEGATION_HINT, "action": "scaffold", "citations": []}
-
-    # A: answer 는 검색 1위 섹션 하나로 먼저 만들고, 근거 문장을 거기서 못 찾으면 전체 자료로 다시 만든다
-    gen_hits = hits[:1] if (C.ANSWER_TOP1_FIRST and action == "answer" and hits) else hits
-    out = await generate(action, messages, gen_hits)
-    if (
-        gen_hits is not hits
-        and out
-        and isinstance(out.get("answer"), str)
-        and out.get("action") != "abstain"
-        and locate_quote(out.get("quote"), gen_hits) is None
-    ):
-        out = await generate(action, messages, hits)
-    if not out or not isinstance(out.get("answer"), str) or not out["answer"].strip():
-        return tutor_fallback()
-
-    # answer 경로에서만 모델의 abstain 강등을 허용 (근거 부재)
-    final_action = action
-    if action == "answer" and out.get("action") == "abstain":
-        final_action = "abstain"
-
-    answer = out["answer"].strip()
-    raw_citations = out.get("citations")
-    if final_action == "answer" and C.QUOTE_CHECK:
-        quote_sid = locate_quote(out.get("quote"), hits)
-        if quote_sid is None:
-            # 자료에서 그대로 옮길 근거 문장을 못 댔다 → 지어낸 답으로 보고 abstain
-            final_action = "abstain"
-            answer = prompts.ABSTAIN_FALLBACK
+        try:
+            category, harm_type = await classify(messages, hits)
+        except Exception as exc:
+            log_error("tutor.classify", exc)
+            category, harm_type = "normal", None
+        if C.ANSWER_ONLY_MARKER and category in ("normal", "answer_seeking"):
+            category = "answer_seeking" if answer_only_marker(messages) else "normal"
+        action = decide_action(category, harm_type)
+        if action not in GENERATED:
+            return template_answer(action, category, harm_type)
+        if C.FIXED_DELEGATION_HINT and category == "academic_dishonesty":
+            return {"answer": prompts.DELEGATION_HINT, "action": "scaffold", "citations": []}
+        if action == "abstain" or (action == "answer" and missing_named_rule(messages, gen_hits)):
+            return {"answer": prompts.ABSTAIN_FALLBACK, "action": "abstain",
+                    "citations": filter_citations([], "abstain", hits)}
+        if generation is not None and action == "answer":
+            out = await generation
         else:
-            raw_citations = [quote_sid]  # 근거 문장이 실제로 들어 있는 섹션을 인용
-    if final_action == "answer" and category == "pii_disclosure" and prompts.PII_NOTE not in answer:
-        answer = f"{answer} {prompts.PII_NOTE}"
+            if generation is not None:
+                generation.cancel()
+                await asyncio.gather(generation, return_exceptions=True)
+            out = await generate(action, messages, gen_hits)
+        if not out or not isinstance(out.get("answer"), str) or not out["answer"].strip():
+            return tutor_fallback()
 
-    return {
-        "answer": answer,
-        "action": final_action,
-        "citations": filter_citations(raw_citations, final_action, hits),
-    }
+        final_action = "abstain" if action == "answer" and out.get("action") == "abstain" else action
+        answer = out["answer"].strip()
+        raw_citations = out.get("citations")
+        if final_action == "answer" and C.QUOTE_CHECK:
+            quote_sid = locate_quote(out.get("quote"), gen_hits)
+            if quote_sid is None:
+                final_action = "abstain"
+                answer = prompts.ABSTAIN_FALLBACK
+            else:
+                raw_citations = [quote_sid]
+        citations = filter_citations(raw_citations, final_action, gen_hits)
+        if final_action == "answer":
+            answer = append_quote(answer, out.get("quote"), citations, gen_hits)
+        if final_action == "answer" and category == "pii_disclosure" and prompts.PII_NOTE not in answer:
+            answer = f"{answer} {prompts.PII_NOTE}"
+        return {"answer": answer, "action": final_action, "citations": citations}
+    finally:
+        if generation is not None:
+            if not generation.done():
+                generation.cancel()
+            await asyncio.gather(generation, return_exceptions=True)

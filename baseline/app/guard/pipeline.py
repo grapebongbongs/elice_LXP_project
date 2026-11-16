@@ -16,7 +16,7 @@ import asyncio
 import re
 from dataclasses import dataclass
 
-from app.common import llm
+from app.common import focus, llm
 from app.common.kb import KnowledgeBase, Section, conversation_text, format_context, retrieval_query
 from app.common.logging_util import log_error
 from app.common.schema import locate_span
@@ -26,6 +26,8 @@ from app.guard import policy, prompts
 
 async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> dict:
     if not messages:
+        return {"decision": "allow", "category": "low_signal_input"}
+    if C.LOW_SIGNAL_RULE and focus.low_signal(messages):
         return {"decision": "allow", "category": "low_signal_input"}
     system, user = prompts.INPUT_SYSTEM, prompts.INPUT_USER.format(conversation=conversation_text(messages))
     if kb is not None and C.INPUT_USE_MATERIAL:
@@ -37,16 +39,19 @@ async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> 
                 context=format_context(hits, max_chars=C.SECTION_MAX_CHARS),
                 conversation=conversation_text(messages),
             )
-    out = await llm.chat_json(
-        system,
-        user,
-        reasoning_effort=C.INPUT_REASONING_EFFORT,
-        max_tokens=C.MAX_TOKENS,
-        tag="guard.input",
-    )
-    if not out:
-        return {"decision": "allow", "category": "normal"}
+    async def primary():
+        try:
+            return await llm.chat_json(
+                system, user, reasoning_effort=C.INPUT_REASONING_EFFORT,
+                max_tokens=C.MAX_TOKENS, tag="guard.input",
+            )
+        except Exception as exc:
+            log_error("guard.input", exc)
+            return None
+    out, checks = await asyncio.gather(primary(), focus.check(messages, C.FOCUS_NAMES))
+    out = out or {}
     category = out.get("category", "normal")
+    category = focus.combine(category, checks)
     if C.ANSWER_ONLY_MARKER and category in ("normal", "answer_seeking"):
         category = "answer_seeking" if answer_only_marker(messages) else "normal"
     return {"decision": policy.decide(category, out.get("decision")), "category": category}
@@ -112,7 +117,7 @@ def restore_span(seg: Segment, span) -> str:
 
 
 # ---------------------------------------------------------------- 답변 판정
-async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) -> dict:
+async def _check_output_once(messages: list[dict], candidate: str, kb: KnowledgeBase) -> dict | None:
     default = {"grounded": True, "unsupported": [], "safe": True, "category": "normal"}
     segs = segment(candidate)
     if not segs:
@@ -135,8 +140,8 @@ async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) 
         max_tokens=C.MAX_TOKENS,
         tag="guard.output",
     )
-    if not out:
-        return default
+    if not out or not isinstance(out.get("grounded"), bool):
+        return None  # 호출 실패를 grounded=true 표로 세지 않는다.
 
     grounded = out.get("grounded") if isinstance(out.get("grounded"), bool) else True
     spans: list[str] = []
@@ -157,6 +162,48 @@ async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) 
 
     safe = out.get("safe") if isinstance(out.get("safe"), bool) else True
     return {"grounded": grounded, "unsupported": spans, "safe": safe, "category": "normal"}
+
+
+def combine_votes(votes: list[dict]) -> dict:
+    if not votes:
+        return {"grounded": True, "unsupported": [], "safe": True, "category": "normal"}
+    # 동률(실패로 표가 부족함)이면 근거 없음 쪽. 정상 3표에는 동률이 없다.
+    grounded = sum(v["grounded"] for v in votes) > len(votes) / 2
+    opposing = [v for v in votes if not v["grounded"]]
+    shortest = min(opposing, key=lambda v: sum(len(s) for s in v["unsupported"]), default=None)
+    return {"grounded": grounded,
+            "unsupported": [] if grounded or shortest is None else shortest["unsupported"],
+            "safe": sum(v["safe"] for v in votes) > len(votes) / 2, "category": "normal"}
+
+
+async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) -> dict:
+    if not segment(candidate):
+        return combine_votes([])
+    tasks = {asyncio.create_task(_check_output_once(messages, candidate, kb)) for _ in range(C.OUTPUT_SAMPLES)}
+    pending = set(tasks)
+    votes = []
+    try:
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    vote = task.result()
+                    if vote is not None:
+                        votes.append(vote)
+                except Exception as exc:
+                    log_error("guard.output", exc)
+            # grounded 과반 확정. safe도 독립 검사할 때는 과반을 기다린다.
+            majority = C.OUTPUT_SAMPLES // 2 + 1
+            ground_fixed = any(sum(v["grounded"] == value for v in votes) >= majority for value in (True, False))
+            safe_fixed = any(sum(v["safe"] == value for v in votes) >= majority for value in (True, False))
+            if ground_fixed and (C.SAFE_FROM_INPUT or safe_fixed):
+                break
+        return combine_votes(votes)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def handle(req: dict, kb: KnowledgeBase) -> dict:

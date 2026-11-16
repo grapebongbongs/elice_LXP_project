@@ -6,6 +6,7 @@
 """
 import asyncio
 import json
+import os
 import re
 import time
 from typing import Any
@@ -51,7 +52,7 @@ def _parse_json(text: str) -> dict | None:
     return None
 
 
-async def chat_json(
+async def _chat_json(
     system: str,
     user: str,
     *,
@@ -103,6 +104,43 @@ async def chat_json(
     out = _parse_json(choice.message.content or "")
     log_llm(tag, ms, _outcome(choice, out))
     return out
+
+
+async def chat_json(system: str, user: str, *, reasoning_effort: str = "low",
+                    max_tokens: int = 2000, tag: str = "") -> dict[str, Any] | None:
+    """느린 입력/생성 호출만 보조 호출. 첫 유효 응답 후 나머지는 취소·회수한다."""
+    delay = float(os.getenv("LLM_HEDGE_AFTER", "8"))
+    kwargs = dict(reasoning_effort=reasoning_effort, max_tokens=max_tokens, tag=tag)
+    if delay <= 0 or tag not in ("guard.input", "tutor.classify", "tutor.generate") or config.LLM_MOCK:
+        return await _chat_json(system, user, **kwargs)
+    tasks = {asyncio.create_task(_chat_json(system, user, **kwargs))}
+    error = None
+    try:
+        done, pending = await asyncio.wait(tasks, timeout=delay)
+        if done:
+            return next(iter(done)).result()
+        backup = dict(kwargs, tag=tag + ".hedge")
+        if tag == "guard.input":
+            backup["reasoning_effort"] = "low"
+        tasks.add(asyncio.create_task(_chat_json(system, user, **backup)))
+        pending = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    out = task.result()
+                    if out is not None:
+                        return out
+                except Exception as exc:
+                    error = exc
+        if error:
+            raise error
+        return None
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _outcome(choice: Any, out: dict | None) -> str:
