@@ -7,5 +7,5 @@ for f in ../.env .env; do
 done
 PORT="${PORT:-8000}"
 if [ "$PORT" = "8080" ]; then echo "8080 은 VSCode 가 사용합니다"; exit 1; fi
-if [ -z "$SERVER_TOKEN" ]; then echo "WARNING: SERVER_TOKEN 이 비어 있습니다 (.env 에 설정)"; fi
+if [ -z "$SERVER_TOKEN" ] && [ -z "$TEAM_TOKEN" ]; then echo "WARNING: SERVER_TOKEN 이 비어 있습니다 (.env 에 설정)"; fi
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" --no-access-log --timeout-keep-alive 60

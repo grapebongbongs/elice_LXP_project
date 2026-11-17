@@ -1,0 +1,154 @@
+{
+  "repository": "grapebongbongs/elice_LXP_project",
+  "branch": "ms_kim_init",
+  "commit": "aad8c31df39d788b3741c472b1b98ebb3cbffbae",
+  "access": "GitHub REST read only; no pull, clone, fetch, merge, or remote added",
+  "team_ownership": "confirmed by user in this chat",
+  "runtime_files": [
+    {
+      "path": "baseline/app/config.py",
+      "reference_path": "competition/baseline/app/config.py",
+      "sha256": "0f7816077fc3d0e6b197add76adc0662cbf05d7d2c6c4434f0761da1c8eda5cf",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/main.py",
+      "reference_path": "competition/baseline/app/main.py",
+      "sha256": "14d7e40b27c4b157ce2d47e04c8c51bd850f171963ca548b666ff8a52be60ba3",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/__init__.py",
+      "reference_path": "competition/baseline/app/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "changed": false
+    },
+    {
+      "path": "baseline/app/common/fewshot.py",
+      "reference_path": "competition/baseline/app/common/fewshot.py",
+      "sha256": "72f707b43a40ec358431e2f213d14a8f597fdc6092f00b97198a65dc5a114e47",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/common/focus.py",
+      "reference_path": "competition/baseline/app/common/focus.py",
+      "sha256": "320f70f99bd57f393ee1e7b2400b803830ce89f53b2ab72eed0a6260a5787170",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/common/kb.py",
+      "reference_path": "competition/baseline/app/common/kb.py",
+      "sha256": "dc6055e992b15fa4ed87767da0ba79b4763655b85f2258d9a36ec45b08829a79",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/common/llm.py",
+      "reference_path": "competition/baseline/app/common/llm.py",
+      "sha256": "b1238fa0acac2c6535c28dcd33203d700fa5d54fac3f2678a6ec32d99b96e512",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/common/logging_util.py",
+      "reference_path": "competition/baseline/app/common/logging_util.py",
+      "sha256": "3ba0dafa309fcfcc835ff51fcb4a1f0b44aed6edc3031676f4ff6a9f6e3e72f7",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/common/normalize.py",
+      "reference_path": "competition/baseline/app/common/normalize.py",
+      "sha256": "6ba125cb564ea7f352bc8253c76b1b355e072525ddef1d7673f5abb0fa15a2d7",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/common/schema.py",
+      "reference_path": "competition/baseline/app/common/schema.py",
+      "sha256": "f21fe82f942401fa5aec6d2657534346402b1ef6e503372ed7c1b4edf146c653",
+      "changed": false
+    },
+    {
+      "path": "baseline/app/common/__init__.py",
+      "reference_path": "competition/baseline/app/common/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "changed": false
+    },
+    {
+      "path": "baseline/app/guard/config.py",
+      "reference_path": "competition/baseline/app/guard/config.py",
+      "sha256": "a03884f39e764fe61b011f4195101b0b88c0c2bcea9ba12b974498a9c8097213",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/guard/pipeline.py",
+      "reference_path": "competition/baseline/app/guard/pipeline.py",
+      "sha256": "7d034585140022f72c19c2deb9d94136a94f35bca71a75bf1415c1b4261e518d",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/guard/policy.py",
+      "reference_path": "competition/baseline/app/guard/policy.py",
+      "sha256": "0236fceababb6c11b1e5b2e5333299a03986db70cc6c603cb3fb44d519f3bb61",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/guard/prompts.py",
+      "reference_path": "competition/baseline/app/guard/prompts.py",
+      "sha256": "8bad644cecf3fdc367b7b308f20dc4c57980a4e1871587e26e73b5db365b5ad1",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/guard/__init__.py",
+      "reference_path": "competition/baseline/app/guard/__init__.py",
+      "sha256": "5abadcf511b710382a7cf115540af5fb55d654a1f48356046b10630e3b0fcb1b",
+      "changed": false
+    },
+    {
+      "path": "baseline/app/tutor/config.py",
+      "reference_path": "competition/baseline/app/tutor/config.py",
+      "sha256": "2e5e55153384cb131a233086ce10b435264d123b59d1bd8f54a927ccd5dc0b98",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/tutor/pipeline.py",
+      "reference_path": "competition/baseline/app/tutor/pipeline.py",
+      "sha256": "ef52253f312b090ddab6417f76b9cbbe01cf767d12b073a2645104d254fb4bf7",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/tutor/prompts.py",
+      "reference_path": "competition/baseline/app/tutor/prompts.py",
+      "sha256": "4cd9db2b11c15145cafeb1855050add81a4e7c17c1a4f09482fa242a956574f9",
+      "changed": true
+    },
+    {
+      "path": "baseline/app/tutor/__init__.py",
+      "reference_path": "competition/baseline/app/tutor/__init__.py",
+      "sha256": "c616d0a121827cb80a2e2e9bb5743a8be3fac99bcec879a5211062e4a089762c",
+      "changed": false
+    },
+    {
+      "path": "baseline/run.sh",
+      "reference_path": "competition/baseline/run.sh",
+      "sha256": "c7965683f6ecd6956196c519a694881993d84dbf064cdb428e06cb50fdf23e72",
+      "changed": true
+    },
+    {
+      "path": "baseline/requirements.txt",
+      "reference_path": "competition/baseline/requirements.txt",
+      "sha256": "9583bcf8763541a1205db5d4aaff6434a99a0711af44edccf38bbd7da1e7ff1e",
+      "changed": false
+    }
+  ],
+  "runtime_modifications_from_reference": [],
+  "deployed": false,
+  "submitted": false,
+  "validation": {
+    "verified_on": "2026-11-17",
+    "runtime_files_byte_identical": 22,
+    "unit_tests_passed": 20,
+    "authenticated_mock_concurrency": 64,
+    "external_llm_calls": 0,
+    "git_pull_performed": false,
+    "deployed": false,
+    "submitted": false
+  }
+}

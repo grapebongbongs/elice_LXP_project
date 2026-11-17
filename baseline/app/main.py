@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app import config, guard, tutor
+from app.common import fewshot
 from app.common.kb import KnowledgeBase
 from app.common.logging_util import log_error, log_request
 from app.common.schema import (
@@ -33,6 +34,7 @@ STATE: dict = {}
 async def lifespan(app: FastAPI):
     # 색인 같은 준비 작업은 서버 시작 때 끝낸다
     STATE["kb"] = KnowledgeBase(config.KB_DIR)
+    fewshot.init()
     if not config.SERVER_TOKEN:
         print("[server] WARNING: SERVER_TOKEN 미설정 - 인증 없이 동작합니다 (로컬 테스트용)")
     if config.LLM_MOCK:
@@ -75,10 +77,14 @@ async def _serve(request: Request, part: str) -> JSONResponse:
         if part == "tutor":
             raw = await asyncio.wait_for(tutor.handle(req, kb), timeout=config.REQUEST_DEADLINE)
             resp = enforce_tutor(raw, valid_ids=set(kb.sections) or None)
+            if config.EXP_DEBUG and isinstance(raw, dict) and "_debug" in raw:
+                resp["_debug"] = raw["_debug"]
         else:
             raw = await asyncio.wait_for(guard.handle(req, kb), timeout=config.REQUEST_DEADLINE)
             cand = req.get("candidate_answer")
             resp = enforce_guard(raw, cand is not None, cand or "")
+            if config.EXP_DEBUG and isinstance(raw, dict) and "_debug" in raw:
+                resp["_debug"] = raw["_debug"]
     except Exception as e:  # 시간 초과 포함 — 항상 규격 응답
         err = type(e).__name__
         log_error(part, e)
