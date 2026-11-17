@@ -1,0 +1,34 @@
+{
+  "tutor_commit": "bb32e5b85cc3ea17cc023944b84d22aeb5fca553",
+  "guard_source_commit": "0446be2",
+  "equivalent_guard_commits": [
+    "b4dd478",
+    "0446be2"
+  ],
+  "official_guard_scores": [
+    93.69,
+    94.63
+  ],
+  "official_guard_mean": 94.16,
+  "observations": 2,
+  "tutor_files_unchanged": {
+    "baseline/app/tutor/config.py": "2e5e55153384cb131a233086ce10b435264d123b59d1bd8f54a927ccd5dc0b98",
+    "baseline/app/tutor/pipeline.py": "ef52253f312b090ddab6417f76b9cbbe01cf767d12b073a2645104d254fb4bf7",
+    "baseline/app/tutor/prompts.py": "4cd9db2b11c15145cafeb1855050add81a4e7c17c1a4f09482fa242a956574f9",
+    "baseline/app/tutor/__init__.py": "c616d0a121827cb80a2e2e9bb5743a8be3fac99bcec879a5211062e4a089762c"
+  },
+  "adaptations": [
+    "guard pipeline imports its legacy transport",
+    "legacy transport shares tutor semaphore; logs metadata only"
+  ],
+  "deployed": false,
+  "submitted": false,
+  "validation": {
+    "tests_passed": 21,
+    "authenticated_mock_concurrency": 64,
+    "tutor_file_hashes_unchanged": true,
+    "tutor_imported_prompt_constants_unchanged": true,
+    "guard_source_parity_except_transport_import": true,
+    "external_llm_calls": 0
+  }
+}
