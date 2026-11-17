@@ -16,6 +16,8 @@ import asyncio
 import re
 from dataclasses import dataclass
 
+from app import config
+from app.common import focus
 from app.guard import llm
 from app.common.kb import KnowledgeBase, Section, conversation_text, format_context, retrieval_query
 from app.common.logging_util import log_error
@@ -25,7 +27,7 @@ from app.guard import policy, prompts
 
 
 async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> dict:
-    if not messages:
+    if not messages or (config.LOW_SIGNAL_RULE and focus.is_low_signal(messages)):
         return {"decision": "allow", "category": "low_signal_input"}
     system, user = prompts.INPUT_SYSTEM, prompts.INPUT_USER.format(conversation=conversation_text(messages))
     if kb is not None and C.INPUT_USE_MATERIAL:
@@ -47,8 +49,14 @@ async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> 
     if not out:
         return {"decision": "allow", "category": "normal"}
     category = out.get("category", "normal")
-    if C.ANSWER_ONLY_MARKER and category in ("normal", "answer_seeking"):
-        category = "answer_seeking" if answer_only_marker(messages) else "normal"
+    if C.ANSWER_ONLY_MARKER and config.ANSWER_ONLY_RULE:
+        marker = focus.has_answer_only_marker(messages)
+        if category == "answer_seeking" and not marker:
+            category = "normal"
+        elif marker and category in ("normal", "out_of_material", "pii_disclosure"):
+            category = "answer_seeking"
+    if category == "normal" and config.SELF_INTRO_RULE and focus.has_self_intro(messages):
+        category = "pii_disclosure"
     return {"decision": policy.decide(category, out.get("decision")), "category": category}
 
 
