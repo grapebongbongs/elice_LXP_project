@@ -48,23 +48,30 @@ SELF_INTRO = re.compile(
 # 공개 세트 튜터 200문항 중 이 꼴은 11개이고 전부 out_of_material(abstain)이다(holdout 2개 포함). 정상 질문은 같은 낱말을 써도
 # "규칙이랑 예외가 헷갈려요", "기준을 설명해 줄래"처럼 묻고, 이름을 붙여 "그게 뭐야"라고 묻지 않는다.
 NAMED_RULE = re.compile(
-    r"([가-힣A-Za-z0-9]+)\s*(규칙|기준|등급|지수|분류법|점검)(이라는\s*개념)?\s*(이|은|는|가)?\s*(뭐|머|무엇|뭔|뭘)"
+    r"([가-힣A-Za-z0-9]+)\s*(규칙|규정|기준|등급|지수|분류법|점검)(이라는\s*개념)?\s*(이|은|는|가|을|를)?\s*(뭐|머|무엇|뭔|뭘|설명해)"
+)
+NAMED_RULE_EN = re.compile(
+    r"\bwhat(?:'s| is)\s+(?:the\s+)?([a-z0-9\- ]{3,35}?)\s+(rule|policy|standard|score|limit|criterion|criteria)\b",
+    re.I,
 )
 _SPACES = re.compile(r"\s+")
 
 
 def asks_missing_named_rule(messages: list[dict], material: str) -> bool:
-    """마지막 발화가 이름 붙은 규칙·기준·등급을 "뭐야"라고 묻는데, 그 이름이 자료(material)에 없으면 True.
-
-    이름은 '꾸미는 말 + 규칙/기준/…' 두 낱말로 본다. 둘을 붙인 말이 자료에 없고, 둘 중 하나는 자료에 아예 나오지 않을 때만
-    없는 이름으로 본다(자료가 그 규칙을 다른 말로 풀어 적었을 수 있으므로, 두 낱말이 모두 나오면 건드리지 않는다).
-    """
-    m = NAMED_RULE.search(last_user_text(messages))
-    if not m:
-        return False
+    """마지막 발화가 이름 붙은 규칙·규정·기준·등급 등을 묻는데, 그 이름이 자료(material)에 없으면 True."""
+    text = last_user_text(messages)
     body = _SPACES.sub("", material.lower())
-    mod, head = m.group(1).lower(), m.group(2)
-    return (mod + head) not in body and (mod not in body or head not in body)
+    m = NAMED_RULE.search(text)
+    if m:
+        mod, head = m.group(1).lower(), m.group(2)
+        if (mod + head) not in body and (mod not in body or head not in body):
+            return True
+    me = NAMED_RULE_EN.search(text)
+    if me:
+        mod_en = re.sub(r"[\s\-]+", "", me.group(1).lower())
+        if len(mod_en) >= 3 and mod_en not in body:
+            return True
+    return False
 
 
 # 차별·비하 문장을 실습 재료로 인용한 정상 질문: "<차별 문장>이라는 댓글을 분류하면 …", "<차별 문장>라는 차별 문구를 실습처럼 정리하면 …".

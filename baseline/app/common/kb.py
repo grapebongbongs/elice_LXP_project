@@ -86,7 +86,9 @@ class KnowledgeBase:
         return text
 
     # ---------- 검색 ----------
-    def search(self, query: str, k: int = 5, k1: float = 1.5, b: float = 0.75) -> list[tuple[Section, float]]:
+    def search(
+        self, query: str, k: int = 5, k1: float = 1.5, b: float = 0.75, max_qf: int | None = None
+    ) -> list[tuple[Section, float]]:
         q = Counter(tokenize(query))
         if not q or not self.sections:
             return []
@@ -98,8 +100,9 @@ class KnowledgeBase:
                 f = s.tokens.get(t)
                 if not f:
                     continue
+                qf_eff = min(qf, max_qf) if max_qf else qf
                 idf = math.log(1 + (n - self._df[t] + 0.5) / (self._df[t] + 0.5))
-                sc += qf * idf * f * (k1 + 1) / (f + k1 * (1 - b + b * s.length / self._avgdl))
+                sc += qf_eff * idf * f * (k1 + 1) / (f + k1 * (1 - b + b * s.length / self._avgdl))
             if sc > 0:
                 scores.append((s, sc))
         scores.sort(key=lambda x: -x[1])

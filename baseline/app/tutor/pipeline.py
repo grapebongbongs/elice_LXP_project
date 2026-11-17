@@ -105,7 +105,7 @@ async def korean_query(text: str, kb: KnowledgeBase | None = None) -> str:
 async def retrieve(messages: list[dict], kb: KnowledgeBase):
     """BM25 검색. 영어 위주 질문이면 한국어 검색어로 한 번 더 찾아 앞에 합친다."""
     query = build_query(messages)
-    hits = kb.search(query, k=C.TOP_K)
+    hits = kb.search(query, k=C.TOP_K, k1=1.2, b=0.4, max_qf=3)
     users = [m["content"] for m in messages if m.get("role") == "user" and m.get("content")]
     last = users[-1] if users else ""
     if C.ENGLISH_QUERY_RATIO > 0 and english_ratio(last) >= C.ENGLISH_QUERY_RATIO:
@@ -115,7 +115,7 @@ async def retrieve(messages: list[dict], kb: KnowledgeBase):
             log_error("tutor.query_ko", e)
             ko = ""
         if ko:
-            ko_hits = kb.search(f"{ko} {ko} {query}", k=C.TOP_K)
+            ko_hits = kb.search(f"{ko} {ko} {query}", k=C.TOP_K, k1=1.2, b=0.4, max_qf=3)
             seen = {s.id for s, _ in ko_hits}
             hits = (ko_hits + [(s, sc) for s, sc in hits if s.id not in seen])[: C.TOP_K]
     return hits
@@ -168,8 +168,10 @@ async def classify(messages: list[dict], hits=None, detail: dict | None = None) 
         detail.update(rule="quoted_hate")
     if config.HARM_TYPE_RULE and category == "harmful_content":
         # refuse(실행 가능한 해로운 요청) / redirect(사람·집단을 깎아내리는 발화)를 가르는 harm_type 보정.
-        # 남의 개인정보·사기 문구 판정이 막는 쪽이면 요청이므로 actionable, 그 밖에 주 분류가 비워 두면 발화로 보고 hate.
-        if focus.fired(detail.get("checks") or {}) & {"pii", "scam"}:
+        # 직접 비하·차별 단서(HATE_CUE) 또는 주 분류의 hate 판정을 우선하되, pii·scam 경계 판정이 막으면 actionable.
+        if harm_type == "hate" or (focus.HATE_CUE.search(focus.last_user_text(messages)) and not (focus.fired(detail.get("checks") or {}) & {"pii"})):
+            harm_type = "hate"
+        elif focus.fired(detail.get("checks") or {}) & {"pii", "scam"}:
             harm_type = "actionable"
         elif harm_type is None:
             harm_type = "hate"
@@ -371,9 +373,17 @@ def section_units(section: Section) -> list[tuple[str, Counter]]:
                 continue
             text = table_row_text(header, s)
             if text:
-                out.append((text, Counter(tokenize(text))))
+                c = Counter(tokenize(text))
+                for num in re.findall(r"\d+(?=[가-힣])", text):
+                    c[num] += 1
+                out.append((text, c))
         else:
-            out.extend((x, Counter(tokenize(x))) for x in split_sentences(s) if not not_a_fact(x))
+            for x in split_sentences(s):
+                if not not_a_fact(x):
+                    c = Counter(tokenize(x))
+                    for num in re.findall(r"\d+(?=[가-힣])", x):
+                        c[num] += 1
+                    out.append((x, c))
     _UNITS[section.id] = out
     return out
 
@@ -472,6 +482,8 @@ def extract_listing(section: Section) -> tuple[list[str], str]:
 def rank_units(query: str, units: list[tuple[str, Counter]]) -> list[int]:
     """섹션 안의 단위들을 질의와의 BM25 점수로 줄 세운다(단위 하나를 문서 하나로 본다). 점수가 0 인 단위는 뺀다."""
     q = Counter(tokenize(query))
+    for num in re.findall(r"\d+(?=[가-힣])", query):
+        q[num] += 1
     n = len(units)
     if not q or not n:
         return []

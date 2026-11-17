@@ -20,6 +20,7 @@ from app import config
 from app.common import focus
 from app.guard import llm
 from app.common.kb import KnowledgeBase, Section, conversation_text, format_context, retrieval_query
+from app.common.normalize import normalize_messages
 from app.common.logging_util import log_error
 from app.common.schema import locate_span
 from app.guard import config as C
@@ -217,7 +218,7 @@ async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) 
 
 
 async def handle(req: dict, kb: KnowledgeBase) -> dict:
-    messages = req["messages"]
+    messages = normalize_messages(req["messages"])
     candidate = req.get("candidate_answer")
 
     tasks = [check_input(messages, kb)]

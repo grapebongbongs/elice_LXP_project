@@ -118,10 +118,10 @@ APPEND_QUOTE_MIN_CHARS = int(os.getenv("TUTOR_APPEND_QUOTE_MIN_CHARS", "8"))
 # 실제 제출(c15a516, 11/16 20:27): 89.97 (튜터 89.17, 가드 90.77). 이것만 뺀 17adfc1 의 튜터는 90.83 / 89.92 다.
 # 글자 겹침은 크게 늘었지만 실제 튜터 점수는 오르지 않았다(한 번의 제출, 튜터 흔들림 ±0.75). 근거 문장 하나로 이미 얻을 만큼 얻은 것으로 보고 꺼 둔다.
 #   APPEND_CONTEXT_SKIP_OVERLAP: 문장의 글자 bigram 중 이 비율 이상이 답에 이미 있으면 같은 말로 보고 건너뛴다
-APPEND_CONTEXT = int(os.getenv("TUTOR_APPEND_CONTEXT", "0"))
-APPEND_CONTEXT_SKIP_OVERLAP = float(os.getenv("TUTOR_APPEND_CONTEXT_SKIP_OVERLAP", "0.8"))
-APPEND_CONTEXT_UNIT_CHARS = int(os.getenv("TUTOR_APPEND_CONTEXT_UNIT_CHARS", "200"))
-APPEND_CONTEXT_MAX_CHARS = int(os.getenv("TUTOR_APPEND_CONTEXT_MAX_CHARS", "420"))
+APPEND_CONTEXT = int(os.getenv("TUTOR_APPEND_CONTEXT", "1"))
+APPEND_CONTEXT_SKIP_OVERLAP = float(os.getenv("TUTOR_APPEND_CONTEXT_SKIP_OVERLAP", "0.45"))
+APPEND_CONTEXT_UNIT_CHARS = int(os.getenv("TUTOR_APPEND_CONTEXT_UNIT_CHARS", "160"))
+APPEND_CONTEXT_MAX_CHARS = int(os.getenv("TUTOR_APPEND_CONTEXT_MAX_CHARS", "180"))
 
 # answer 생성 1차 시도에 보여 줄 검색 상위 섹션 수 (0 이면 처음부터 TOP_K 개를 모두 보여 준다).
 # 실측(전체 2회, SPECULATIVE 와 함께): 튜터 84.44 → 86.81, 인용 F1 0.83 → 0.88, 근거 충실 0.88 → 0.90, p95 지연 11.4초 → 10.3초.
