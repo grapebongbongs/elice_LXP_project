@@ -102,6 +102,27 @@ GEN_ABSTAIN = _GEN_COMMON + """
 
 JSON 하나만 출력: {"action": "abstain", "answer": "<답변>", "citations": []}"""
 
+# 자료 문장을 골라서 답하기 (TUTOR_EXTRACTIVE=1, app/tutor/pipeline.py 의 generate_extractive)
+GEN_EXTRACT = _GEN_COMMON + """
+# 이번 응대: 자료 문장을 골라 답하기 (answer)
+<자료 문장>에는 근거 섹션의 문장(표는 한 행, 짧은 코드·실행 결과는 앞 문장에 이어서)이 번호와 함께 있습니다. "·" 로 시작하는 번호 없는 줄(소제목, 묻는 말, 예시 문장, 긴 코드)은 문맥을 알려 줄 뿐 고를 수 없습니다. 답을 새로 쓰지 않고, 마지막 학습자 질문에 답이 되는 문장의 번호를 고릅니다.
+- asked: 마지막 학습자 질문이 알고 싶어 하는 것을 한 구절(30자 이내)로 적습니다. 학습자가 말한 상품·실습·예제·도구의 이름을 그대로 넣습니다. 예: "다람쥐 틴즈 체크카드의 하루 사용 한도"
+- ids: 질문이 묻는 값·이름·조건·규칙·방법이 직접 적힌 문장의 번호를 1~3개 고릅니다. 가장 직접 답하는 문장을 맨 앞에 둡니다. 답하는 데 필요 없는 문장은 넣지 않습니다.
+- 고른 문장이 "이 카드", "이 통장", "이 실습"처럼 가리키는 말로 대상을 부르면, 그 대상의 이름이 적힌 가까운 문장도 함께 고릅니다(모두 3개 이내).
+- <자료 문장>에 질문의 답이 없으면 action 을 "abstain" 으로 하고 ids 는 [] 로 둡니다. 학습자가 이름을 붙여 묻는 규칙·기준·등급·수수료·한도가 자료에 그 이름이나 같은 뜻으로 없으면, 비슷한 다른 문장을 대신 고르지 말고 abstain 입니다. 학습자가 쓴 이름이 소제목 줄에 있으면 자료에 있는 것입니다.
+
+JSON 하나만 출력: {"asked": "<질문이 묻는 것>", "action": "answer|abstain", "ids": [<번호>, ...]}"""
+
+EXTRACT_USER = """<자료 문장 섹션="{sid}" 제목="{title}">
+{sentences}
+</자료 문장>
+
+<대화>
+{conversation}
+</대화>
+
+위 대화의 마지막 학습자 발화에 답이 되는 문장의 번호를 고르세요. JSON 만 출력합니다."""
+
 GEN_SYSTEMS = {"answer": GEN_ANSWER, "scaffold": GEN_SCAFFOLD, "abstain": GEN_ABSTAIN}
 
 GEN_USER = """<자료>
@@ -124,6 +145,13 @@ ACADEMIC_SCAFFOLD = (
 
 # 답 끝에 근거 문장을 그대로 덧붙일 때의 틀 (TUTOR_APPEND_QUOTE=1, app/tutor/pipeline.py 의 append_quote)
 QUOTE_NOTE = '자료에는 이렇게 적혀 있어요: "{quote}"'
+
+# 답 끝에 인용한 섹션의 관련 문장을 그대로 덧붙일 때의 틀 (TUTOR_APPEND_CONTEXT, app/tutor/pipeline.py 의 append_context)
+CONTEXT_NOTE = "함께 보면 좋은 자료 문장: {sentences}"
+# 1차 생성의 근거 문장 확인이 실패했을 때, 자료 문장만으로 답하는 글(QUOTE_FAIL_EXTRACT). {sentences} 는 큰따옴표로 감싼 자료 문장들.
+EXTRACT_ANSWER = "자료에는 이렇게 적혀 있어요: {sentences}"
+# 골라 답하기에서 모델이 적은 "질문이 묻는 것"을 머리말로 둘 때 (TUTOR_EXTRACTIVE_ASKED=1)
+EXTRACT_ANSWER_ASKED = "{asked}에 대해 자료에는 이렇게 적혀 있어요: {sentences}"
 
 # 자기 개인정보를 밝힌 정상 질문(pii_disclosure → answer)에 덧붙이는 문장
 PII_NOTE = "학교나 이름 같은 개인정보는 채팅에 적지 않아도 돼요."

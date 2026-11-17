@@ -11,12 +11,15 @@ req = {"messages": [...], "session_id": ..., "spec_version": ...}
 - 인용은 검색된 섹션 중에서만, 최대 MAX_CITATIONS 개.
 """
 import asyncio
+import math
+import json
 import re
 import time
+from collections import Counter
 
 from app import config
 from app.common import fewshot, focus, llm
-from app.common.kb import KnowledgeBase, Section, conversation_text, format_context
+from app.common.kb import KnowledgeBase, Section, conversation_text, format_context, tokenize
 from app.common.logging_util import log_error
 from app.common.normalize import compact, normalize_messages, normalize_text
 from app.common.schema import GUARD_CATEGORIES, tutor_fallback
@@ -286,8 +289,336 @@ def append_quote(answer: str, quote, cited: list[str], hits) -> str:
     return f"{answer} {prompts.QUOTE_NOTE.format(quote=q)}"
 
 
+# ---------------------------------------------------------------- 관련 자료 문장 덧붙이기
+_UNIT_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_TABLE_RULE = re.compile(r"[|\-:\s]+")  # 마크다운 표의 구분 줄(|---|---|)
+_EMPTY_CELL = re.compile(r"[\s\-—–]*")
+# 사실을 말하는 문장이 아닌 것: 큰따옴표로 옮긴 말이 든 문장(예시 프롬프트, 지어낸 답의 예, 차별·지시 우회 문장의 예)과 묻는 문장.
+# 자료에는 "만약 Helpy가 “…5월 13일에 열렸고 의견은 32건이었다”고 답했다면 어떻게 할까요?"처럼 틀린 답을 예로 드는 문장이 있다.
+# 이런 문장을 답에 붙이면 자료와 다른 값을 말한 것으로 읽힌다(공개 세트 한 문항에서 로컬 판정이 2번 모두 근거 불충실로 봤다).
+# 큰따옴표가 든 문장은 자료 전체에 45개(대부분 프롬프트 과목의 예시 문장)다. "…했다면 …해요" 같은 조건 문장은 규칙을 말하는 문장이 많아 남긴다
+# (빼면 정답 사실 겹침 0.6 이상 비율이 holdout 85.7% → 85.1%, 4개일 때 88.6% → 85.7%).
+# 11/17 검토에서 더한 것: 통째로 작은따옴표 인용인 문장과, AI 에게 시키는 반말 명령으로 끝나는 문장("…써 줘.", "…넣지 마.", "…조력자야.")도 뺀다.
+# 프롬프트 과목의 예시 프롬프트 7문장(PR-01-02, PR-03-02)이 여기에 걸리고, 다른 문장은 걸리지 않는다. 따옴표는 인라인 코드 밖의 것만 본다.
+_NOT_A_FACT = re.compile(r"[“”\"]|\?\s*$|^[‘'][^‘’']*[’']$|(?:줘|마|야)[.!]?\s*$")
+_INLINE_CODE = re.compile(r"`[^`]*`")
+_UNITS: dict[str, list[tuple[str, Counter]]] = {}
+
+
+def not_a_fact(text: str) -> bool:
+    """사실을 말하는 문장이 아니면 True. 인라인 코드(`…`) 안의 따옴표는 세지 않는다(코드의 문자열 따옴표일 뿐이다)."""
+    return bool(_NOT_A_FACT.search(_INLINE_CODE.sub("", text)))
+
+
+def split_sentences(line: str) -> list[str]:
+    """한 문단을 문장으로 나눈다. 따옴표 안에서 끝난 문장은 따옴표가 닫힐 때까지 다음 문장과 이어 붙인다(인용문이 중간에서 잘리지 않게)."""
+    out: list[str] = []
+    buf = ""
+    for piece in _UNIT_SPLIT.split(line):
+        piece = piece.strip()
+        if not piece:
+            continue
+        buf = f"{buf} {piece}" if buf else piece
+        if buf.count("“") <= buf.count("”") and buf.count("‘") <= buf.count("’") and buf.count('"') % 2 == 0:
+            out.append(buf)
+            buf = ""
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _bigram_set(text: str) -> set[str]:
+    return {text[i : i + 2] for i in range(len(text) - 1)}
+
+
+def _cells(row: str) -> list[str]:
+    return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def table_row_text(header: str, row: str) -> str:
+    """표의 한 행을 '머리: 값, 머리: 값' 꼴의 한 줄로 적는다(행만으로는 어느 칸의 값인지 알 수 없다). 빈 칸은 뺀다."""
+    hs, vs = _cells(header), _cells(row)
+    if len(hs) != len(vs):
+        return " ".join(v for v in vs if v)
+    return ", ".join(f"{h}: {v}" for h, v in zip(hs, vs) if not _EMPTY_CELL.fullmatch(v))
+
+
+def section_units(section: Section) -> list[tuple[str, Counter]]:
+    """섹션 글을 답에 덧붙일 수 있는 단위로 나눈다: 문장 하나, 또는 표의 한 행. (글, 낱말 수) 목록.
+
+    제목 줄·코드 줄·표의 머리 행은 단위가 아니다. 큰따옴표로 옮긴 말이 든 문장과 묻는 문장도 뺀다(_NOT_A_FACT).
+    문장은 자료의 글 그대로이고, 표의 행은 머리 행의 칸 이름을 붙여 한 줄로 적는다.
+    """
+    cached = _UNITS.get(section.id)
+    if cached is not None:
+        return cached
+    out: list[tuple[str, Counter]] = []
+    in_code, header = False, None
+    for line in section.text.splitlines():
+        s = line.strip()
+        if s.startswith("```"):
+            in_code = not in_code
+            continue
+        if not s.startswith("|"):
+            header = None
+        if not s or s.startswith("#") or in_code:
+            continue
+        if s.startswith("|"):
+            if _TABLE_RULE.fullmatch(s):
+                continue
+            if header is None:
+                header = s
+                continue
+            text = table_row_text(header, s)
+            if text:
+                out.append((text, Counter(tokenize(text))))
+        else:
+            out.extend((x, Counter(tokenize(x))) for x in split_sentences(s) if not not_a_fact(x))
+    _UNITS[section.id] = out
+    return out
+
+
+_FRAGMENT_MIN = 8  # 공백·문장부호를 뺀 글자가 이보다 적은 조각("A.", "아니요.", "실행 결과:")은 혼자서는 답이 되지 않는다
+_FAQ_MARK = re.compile(r"^A\.\s+")
+_CODE_UNIT_LINES = 8  # 이 줄 수 이하의 코드·실행 결과 블록은 바로 앞 문장에 이어 붙여 고를 수 있게 한다
+_LISTINGS: dict[str, tuple[list[str], str]] = {}
+
+
+def extract_listing(section: Section) -> tuple[list[str], str]:
+    """자료 문장을 골라 답하는 방식(EXTRACTIVE)에서 모델에게 보여 줄 목록: (고를 수 있는 단위들, 번호를 붙인 글).
+
+    section_units 와 다른 점:
+    - 짧은 코드·실행 결과 블록(_CODE_UNIT_LINES 줄 이하)은 바로 앞 문장에 이어 붙인다. 값이 블록 안에만 있는 사실이 있다
+      (예: "…실행 결과는 다음과 같아요." 다음의 `[6, 15, 24]`). 줄은 " / " 로 잇는다.
+    - 답 표시 "A." 는 떼고, 한두 낱말짜리 조각("아니요.")은 다음 문장에 붙인다.
+    - 소제목, 묻는 문장, 큰따옴표로 옮긴 예시 문장, 긴 코드는 번호 없이 "·" 로 시작하는 줄로만 보여 준다(문맥용, 고를 수 없다).
+    """
+    cached = _LISTINGS.get(section.id)
+    if cached is not None:
+        return cached
+    items: list[list] = []  # [kind, text], kind 는 "unit" 또는 "ctx"
+    attach: int | None = None  # 코드 블록을 이어 붙일 단위(바로 앞 본문 줄의 마지막 단위)
+    in_code, header = False, None
+    block: list[str] = []
+    for line in section.text.splitlines():
+        s = line.strip()
+        if s.startswith("```"):
+            if in_code:
+                code = [x.strip() for x in block if x.strip()]
+                if code and len(code) <= _CODE_UNIT_LINES:
+                    text = " / ".join(code)
+                    if attach is not None:
+                        items[attach][1] = f"{items[attach][1]} {text}"
+                    else:
+                        items.append(["unit", text])
+                elif code:
+                    items.append(["ctx", "(코드) " + " / ".join(code[:_CODE_UNIT_LINES]) + " …"])
+                attach = None
+            in_code, block = not in_code, []
+            continue
+        if in_code:
+            block.append(line)
+            continue
+        if not s.startswith("|"):
+            header = None
+        if not s:
+            continue
+        if s.startswith("#"):
+            head = s.lstrip("# ").strip()
+            if head:
+                items.append(["ctx", head])
+            attach = None
+            continue
+        if s.startswith("|"):
+            attach = None
+            if _TABLE_RULE.fullmatch(s):
+                continue
+            if header is None:
+                header = s
+                continue
+            text = table_row_text(header, s)
+            if text:
+                items.append(["unit", text])
+            continue
+        pending = ""
+        last_unit = None
+        for x in split_sentences(_FAQ_MARK.sub("", s)):
+            if pending:
+                x, pending = f"{pending} {x}", ""
+            if not_a_fact(x):
+                items.append(["ctx", x])
+                continue
+            if len(_squash(x)) < _FRAGMENT_MIN:
+                pending = x  # 다음 문장에 붙인다
+                continue
+            items.append(["unit", x])
+            last_unit = len(items) - 1
+        if pending:  # 줄의 마지막 조각("실행 결과:")은 뒤따르는 코드 블록이 붙을 수 있게 단위로 둔다
+            items.append(["unit", pending])
+            last_unit = len(items) - 1
+        attach = last_unit
+    units: list[str] = []
+    lines: list[str] = []
+    for kind, text in items:
+        if kind == "unit" and len(_squash(text)) >= _FRAGMENT_MIN:
+            units.append(text)
+            lines.append(f"[{len(units)}] {text}")
+        else:
+            lines.append(f"· {text}")
+    _LISTINGS[section.id] = (units, "\n".join(lines))
+    return _LISTINGS[section.id]
+
+
+def rank_units(query: str, units: list[tuple[str, Counter]]) -> list[int]:
+    """섹션 안의 단위들을 질의와의 BM25 점수로 줄 세운다(단위 하나를 문서 하나로 본다). 점수가 0 인 단위는 뺀다."""
+    q = Counter(tokenize(query))
+    n = len(units)
+    if not q or not n:
+        return []
+    df: Counter = Counter()
+    for _, toks in units:
+        df.update(toks.keys())
+    avg = sum(sum(toks.values()) for _, toks in units) / n or 1.0
+    scored = []
+    for i, (_, toks) in enumerate(units):
+        length = sum(toks.values())
+        sc = 0.0
+        for w, qf in q.items():
+            f = toks.get(w)
+            if f:
+                idf = math.log(1 + (n - df[w] + 0.5) / (df[w] + 0.5))
+                sc += min(qf, 2) * idf * f * 2.5 / (f + 1.5 * (0.25 + 0.75 * length / avg))
+        if sc > 0:
+            scored.append((sc, -i, i))
+    scored.sort(reverse=True)
+    return [i for _, _, i in scored]
+
+
+def append_context(answer: str, messages: list[dict], cited: list[str], hits) -> str:
+    """답 끝에, 인용한 섹션에서 질문과 가장 가까운 문장 APPEND_CONTEXT 개를 덧붙인다.
+
+    답과 근거 문장이 정답 사실과 다른 문장을 짚는 일이 있다(같은 섹션의 다른 문장). 질문의 낱말로 고른 문장을 함께 보여 주면
+    자료의 관련 사실이 답에 빠짐없이 들어간다. 덧붙이는 것은 인용한 섹션의 문장 그대로(표는 그 행의 값)이다.
+    답(덧붙인 근거 문장 포함)에 이미 들어 있거나 거의 같은 말이 있는 문장은 건너뛴다(글자 bigram 의 APPEND_CONTEXT_SKIP_OVERLAP 이상이 답에 있음).
+    """
+    if C.APPEND_CONTEXT <= 0 or not cited:
+        return answer
+    section = next((s for s, _ in hits if s.id == cited[0]), None)
+    if section is None:
+        return answer
+    picked = pick_units(section, messages, C.APPEND_CONTEXT, _bigram_set(_squash(answer)))
+    if not picked:
+        return answer
+    sentences = " ".join('"' + p + '"' for p in picked)
+    return answer + " " + prompts.CONTEXT_NOTE.format(sentences=sentences)
+
+
+def pick_units(section: Section, messages: list[dict], n: int, have: set[str] | None = None) -> list[str]:
+    """섹션에서 질문(마지막 발화 2회 + 앞선 발화 3개)과 가장 가까운 문장·표의 행을 n 개까지 고른다. 자료의 글 그대로다.
+
+    have 는 이미 답에 들어 있는 글자 bigram 이다. 문장의 bigram 가운데 APPEND_CONTEXT_SKIP_OVERLAP 이상이 그 안에 있으면 같은 말로 보고
+    건너뛴다(고른 문장끼리도 같은 방식으로 겹침을 피한다). 너무 짧거나 긴 문장, 전체 글자 수 상한을 넘기는 문장도 건너뛴다.
+    """
+    users = [m["content"] for m in messages if m.get("role") == "user" and m.get("content")]
+    real = [u for u in users if not is_quick_button(u)] or users
+    if n <= 0 or not real:
+        return []
+    units = section_units(section)
+    query = f"{real[-1]} {real[-1]} {' '.join(real[:-1][-3:])}"
+    have = set(have or ())
+    picked: list[str] = []
+    total = 0
+    for i in rank_units(query, units):
+        if len(picked) >= n:
+            break
+        text = units[i][0]
+        grams = _bigram_set(_squash(text))
+        if len(grams) < C.APPEND_QUOTE_MIN_CHARS or len(grams & have) >= C.APPEND_CONTEXT_SKIP_OVERLAP * len(grams):
+            continue
+        if len(text) > C.APPEND_CONTEXT_UNIT_CHARS or total + len(text) > C.APPEND_CONTEXT_MAX_CHARS:
+            continue
+        picked.append(text)
+        have |= grams
+        total += len(text)
+    return picked
+
+
+def extractive_answer(hits, messages: list[dict], category: str | None = None) -> dict | None:
+    """검색 1위 섹션에서 질문과 가장 가까운 문장 QUOTE_FAIL_EXTRACT 개를 그대로 옮겨 답한다. 고를 문장이 없으면 None.
+
+    모델이 쓴 글은 넣지 않는다. 답은 자료 문장 그대로이고 인용은 그 문장이 나온 섹션(검색 1위)이다.
+    """
+    if not hits:
+        return None
+    section = hits[0][0]
+    picked = pick_units(section, messages, C.QUOTE_FAIL_EXTRACT)
+    if not picked:
+        return None
+    answer = prompts.EXTRACT_ANSWER.format(sentences=" ".join('"' + p + '"' for p in picked))
+    if category == "pii_disclosure":
+        answer = f"{answer} {prompts.PII_NOTE}"
+    return {"answer": answer, "action": "answer", "citations": [section.id]}
+
+
 # ---------------------------------------------------------------- 2단계: 생성
+async def generate_extractive(messages: list[dict], hits) -> dict | None:
+    """근거 섹션의 문장에 번호를 붙여 보여 주고, 질문에 답이 되는 문장의 번호를 모델이 고르게 한다. 답은 고른 문장 그대로다.
+
+    돌려주는 꼴은 generate("answer", …) 와 같다(action, answer, citations, quote). "_extract_sid" 는 고른 문장이 나온 섹션으로,
+    이 값이 있으면 근거 문장 확인(locate_quote)을 다시 하지 않는다(문장을 자료에서 그대로 가져왔으므로).
+    모델이 적은 asked(질문이 묻는 것 한 구절)는 답의 머리말에만 쓴다: 고른 문장이 "이 카드는…"처럼 대상의 이름 없이 시작해도
+    답에 학습자가 물은 이름이 들어가게 한다.
+    """
+    units: list[tuple[str, str]] = []
+    listing: list[str] = []
+    for s, _ in hits:
+        texts, shown = extract_listing(s)
+        base = len(units)
+        if base:  # 섹션이 둘 이상이면 번호를 이어 붙인다
+            shown = re.sub(r"(?m)^\[(\d+)\]", lambda m: f"[{int(m.group(1)) + base}]", shown)
+        units.extend((s.id, t) for t in texts)
+        listing.append(shown)
+    if not units:
+        return None
+    user = prompts.EXTRACT_USER.format(
+        sid=hits[0][0].id,
+        title=hits[0][0].title,
+        sentences="\n".join(listing),
+        conversation=conversation_text(messages),
+    )
+    out = await llm.chat_json(prompts.GEN_EXTRACT, user, reasoning_effort=C.REASONING_EFFORT, max_tokens=C.MAX_TOKENS)
+    if not out:
+        return None
+    raw = out.get("ids")
+    ids: list[int] = []
+    if raw is not None and not isinstance(raw, bool):
+        for n in re.findall(r"\d+", json.dumps(raw)):  # [3, 5], ["3"], "[3] [5]" 어느 꼴이든 번호만 읽는다
+            i = int(n)
+            if 1 <= i <= len(units) and i not in ids:
+                ids.append(i)
+    if out.get("action") == "abstain":
+        return {"action": "abstain", "answer": prompts.ABSTAIN_FALLBACK, "citations": []}
+    if not ids:
+        # 답이 있다고 했는데 번호를 읽지 못했다 → 질문과 가장 가까운 문장으로 답한다(QUOTE_FAIL_EXTRACT 와 같은 방식)
+        ext = extractive_answer(hits, messages) if C.QUOTE_FAIL_EXTRACT > 0 else None
+        if ext is None:
+            return {"action": "abstain", "answer": prompts.ABSTAIN_FALLBACK, "citations": []}
+        return {**ext, "quote": None, "_extract_sid": ext["citations"][0]}
+    sid = units[ids[0] - 1][0]
+    picked = [units[i - 1][1] for i in ids if units[i - 1][0] == sid][: max(1, C.EXTRACTIVE_MAX)]
+    sentences = " ".join('"' + t + '"' for t in picked)
+    asked = out.get("asked")
+    asked = " ".join(asked.split()).strip(" .?!\"'“”‘’") if isinstance(asked, str) else ""
+    if C.EXTRACTIVE_ASKED and 2 <= len(asked) <= C.EXTRACTIVE_ASKED_MAX and not re.search(r"[\"“”]", asked):
+        answer = prompts.EXTRACT_ANSWER_ASKED.format(asked=asked, sentences=sentences)
+    else:
+        answer = prompts.EXTRACT_ANSWER.format(sentences=sentences)
+    return {"action": "answer", "answer": answer, "citations": [sid], "quote": picked[0], "_extract_sid": sid}
+
+
 async def generate(action: str, messages: list[dict], hits) -> dict | None:
+    if action == "answer" and C.EXTRACTIVE and hits:
+        return await generate_extractive(messages, hits)
     user = prompts.GEN_USER.format(
         context=format_context(hits, max_chars=C.SECTION_MAX_CHARS),
         conversation=conversation_text(messages),
@@ -311,7 +642,8 @@ def usable_first_pass(cand, first) -> bool:
         cand and cand.get("action") != "abstain" and isinstance(cand.get("answer"), str) and cand["answer"].strip()
     )
     # 근거 문장을 자료에서 못 찾았을 때 답을 버릴지는 QUOTE_FAIL_ABSTAIN 이 정한다(꺼져 있으면 답을 유지).
-    return answered and (locate_quote(cand.get("quote"), first) is not None or not C.QUOTE_FAIL_ABSTAIN)
+    located = bool(cand and cand.get("_extract_sid")) or (answered and locate_quote(cand.get("quote"), first) is not None)
+    return answered and (located or not C.QUOTE_FAIL_ABSTAIN)
 
 
 async def retry_first_pass(messages: list[dict], first, dbg: dict) -> dict | None:
@@ -422,7 +754,7 @@ async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict) -> 
                 and isinstance(cand.get("answer"), str)
                 and cand["answer"].strip()
             )
-            located = answered and locate_quote(cand.get("quote"), first) is not None
+            located = answered and (bool(cand.get("_extract_sid")) or locate_quote(cand.get("quote"), first) is not None)
             ok = usable_first_pass(cand, first)
             dbg.update(first_pass="used" if ok else "fallback", first_located=located)
             if not ok:  # 1차 생성이 왜 쓰이지 않았는지: 응답 없음 / 모델이 abstain / 답이 빔 / 근거 문장을 자료에서 못 찾음
@@ -447,6 +779,14 @@ async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict) -> 
         # FIRST_PASS_ONLY 이면 다시 생성하지 않고 "자료에 없음"으로 답한다. 꺼져 있어도 시간 예산을 넘겼으면 같다.
         if not C.FIRST_PASS_ONLY:
             log_error("tutor.regen_skipped", TimeoutError())
+        if C.QUOTE_FAIL_EXTRACT > 0 and dbg.get("first_why") == "quote":
+            # 모델이 답은 했는데 옮겨 적은 근거 문장이 자료와 달랐다(모델이 스스로 "자료에 없다"고 한 경우가 아니다).
+            # 저장된 공개 세트 실행에서 이 경우는 9건 모두 자료에 답이 있는 질문이었고, 자료에 없는 질문 59건은 전부 모델이 스스로 abstain 했다.
+            # 모델의 글은 믿을 수 없으므로(#56) 버리고, 검색 1위 섹션에서 질문과 가장 가까운 문장을 그대로 옮겨 답한다.
+            ext = extractive_answer(hits, messages, category)
+            if ext is not None:
+                dbg.update(first_pass="extract")
+                return ext
         dbg.update(first_pass="abstain" if C.FIRST_PASS_ONLY else "skipped")
         return {
             "answer": prompts.ABSTAIN_FALLBACK,
@@ -467,7 +807,7 @@ async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict) -> 
     answer = out["answer"].strip()
     raw_citations = out.get("citations")
     if final_action == "answer" and C.QUOTE_CHECK:
-        quote_sid = locate_quote(out.get("quote"), hits)
+        quote_sid = out.get("_extract_sid") or locate_quote(out.get("quote"), hits)
         dbg.update(quote_sid=quote_sid)
         if quote_sid is None and C.QUOTE_FAIL_ABSTAIN:
             # 자료에서 그대로 옮길 근거 문장을 못 댔다 → 지어낸 답으로 보고 abstain
@@ -480,6 +820,8 @@ async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict) -> 
     citations = filter_citations(raw_citations, final_action, hits)
     if final_action == "answer" and C.APPEND_QUOTE:
         answer = append_quote(answer, out.get("quote"), citations, hits)
+    if final_action == "answer" and C.APPEND_CONTEXT > 0:
+        answer = append_context(answer, messages, citations, hits)
     if final_action == "answer" and category == "pii_disclosure" and prompts.PII_NOTE not in answer:
         answer = f"{answer} {prompts.PII_NOTE}"
 
