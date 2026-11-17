@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app import config, guard, tutor
+from app.common import fewshot
 from app.common.kb import KnowledgeBase
 from app.common.logging_util import log_error, log_request
 from app.common.schema import (
@@ -24,7 +25,6 @@ from app.common.schema import (
     normalize_request,
     tutor_fallback,
 )
-from app.tutor.retrieval import TutorRetriever
 
 MAX_BODY = 256 * 1024
 STATE: dict = {}
@@ -34,19 +34,21 @@ STATE: dict = {}
 async def lifespan(app: FastAPI):
     # 색인 같은 준비 작업은 서버 시작 때 끝낸다
     STATE["kb"] = KnowledgeBase(config.KB_DIR)
-    # 가드는 기존 BM25를 유지한다. 임베딩은 튜터 경로에서만 사용한다.
-    retriever = TutorRetriever(STATE["kb"])
-    STATE["tutor_retriever"] = retriever
-    await retriever.initialize()
+    fewshot.init()
+    # 임베딩을 쓰는 설정이 켜져 있으면 자료 문장 임베딩을 서버 시작 때 만들어 둔다(요청 처리 중에는 만들지 않는다)
+    from app.guard import config as guard_config
+    from app.guard import pipeline as guard_pipeline
+
+    if guard_config.OUTPUT_ALIGN > 0:
+        from app.common import embed
+
+        ok = await embed.ensure(guard_pipeline.kb_units(STATE["kb"]))
+        print(f"[server] 자료 문장 임베딩: {'준비됨' if ok else '쓸 수 없음(임베딩 없이 동작)'}")
     if not config.SERVER_TOKEN:
         print("[server] WARNING: SERVER_TOKEN 미설정 - 인증 없이 동작합니다 (로컬 테스트용)")
     if config.LLM_MOCK:
         print("[server] LLM_MOCK=1 - LLM 호출 없이 fallback 응답만 냅니다")
-    try:
-        yield
-    finally:
-        await retriever.close()
-        STATE.pop("tutor_retriever", None)
+    yield
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -82,14 +84,16 @@ async def _serve(request: Request, part: str) -> JSONResponse:
     err = ""
     try:
         if part == "tutor":
-            raw = await asyncio.wait_for(
-                tutor.handle(req, kb, STATE.get("tutor_retriever")), timeout=config.REQUEST_DEADLINE
-            )
+            raw = await asyncio.wait_for(tutor.handle(req, kb), timeout=config.REQUEST_DEADLINE)
             resp = enforce_tutor(raw, valid_ids=set(kb.sections) or None)
+            if config.EXP_DEBUG and isinstance(raw, dict) and "_debug" in raw:
+                resp["_debug"] = raw["_debug"]
         else:
             raw = await asyncio.wait_for(guard.handle(req, kb), timeout=config.REQUEST_DEADLINE)
             cand = req.get("candidate_answer")
             resp = enforce_guard(raw, cand is not None, cand or "")
+            if config.EXP_DEBUG and isinstance(raw, dict) and "_debug" in raw:
+                resp["_debug"] = raw["_debug"]
     except Exception as e:  # 시간 초과 포함 — 항상 규격 응답
         err = type(e).__name__
         log_error(part, e)
