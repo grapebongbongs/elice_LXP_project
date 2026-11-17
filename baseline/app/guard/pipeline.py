@@ -120,32 +120,33 @@ def restore_span(seg: Segment, span) -> str:
 
 
 # ---------------------------------------------------------------- 답변 판정
-async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) -> dict:
-    default = {"grounded": True, "unsupported": [], "safe": True, "category": "normal"}
-    segs = segment(candidate)
-    if not segs:
-        return default
+_SPAN_NOISE = re.compile(r"[\s\W_]+")
 
-    # 근거 자료: 후보 답변이 직접 인용한 섹션을 먼저, 그다음 검색 결과
-    hits = kb.search(retrieval_query(messages) + " " + _CITE.sub(" ", candidate), k=C.TOP_K)
-    cited: list[tuple[Section, float]] = [(kb.sections[s], 0.0) for s in cited_ids(candidate) if kb.has(s)]
-    seen = {s.id for s, _ in cited}
-    context_hits = cited + [(s, sc) for s, sc in hits if s.id not in seen]
 
+def _span_size(spans: list[str]) -> int:
+    return len(_SPAN_NOISE.sub("", "".join(spans)))
+
+
+def combine_votes(votes: list[dict]) -> dict:
+    bad = [v for v in votes if not v["grounded"]]
+    safe = sum(bool(v["safe"]) for v in votes) * 2 >= len(votes)
+    if not bad or len(bad) < len(votes) - len(bad):
+        return {"grounded": True, "unsupported": [], "safe": safe}
+    with_span = [v["unsupported"] for v in bad if v["unsupported"]]
+    spans = min(with_span, key=_span_size) if with_span else []
+    return {"grounded": False, "unsupported": list(spans), "safe": safe}
+
+
+async def _judge_output(user: str, segs: list[Segment], system: str = prompts.OUTPUT_SYSTEM) -> dict | None:
     out = await llm.chat_json(
-        prompts.OUTPUT_SYSTEM,
-        prompts.OUTPUT_USER.format(
-            context=format_context(context_hits, max_chars=C.SECTION_MAX_CHARS),
-            conversation=conversation_text(messages),
-            segments="\n".join(f"[{i}] {s.text}" for i, s in enumerate(segs, 1)),
-        ),
+        system,
+        user,
         reasoning_effort=C.OUTPUT_REASONING_EFFORT,
         max_tokens=C.MAX_TOKENS,
         tag="guard.output",
     )
     if not out:
-        return default
-
+        return None
     grounded = out.get("grounded") if isinstance(out.get("grounded"), bool) else True
     spans: list[str] = []
     if not grounded:
@@ -162,9 +163,57 @@ async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) 
                     spans.append(s)
         if not spans and C.GROUNDED_FALSE_REQUIRES_SPAN:
             grounded = True
-
     safe = out.get("safe") if isinstance(out.get("safe"), bool) else True
-    return {"grounded": grounded, "unsupported": spans, "safe": safe, "category": "normal"}
+    return {"grounded": grounded, "unsupported": spans, "safe": safe}
+
+
+async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) -> dict:
+    default = {"grounded": True, "unsupported": [], "safe": True, "category": "normal"}
+    segs = segment(candidate)
+    if not segs:
+        return default
+
+    hits = kb.search(retrieval_query(messages) + " " + _CITE.sub(" ", candidate), k=C.TOP_K)
+    cited: list[tuple[Section, float]] = [(kb.sections[s], 0.0) for s in cited_ids(candidate) if kb.has(s)]
+    seen = {s.id for s, _ in cited}
+    context_hits = cited + [(s, sc) for s, sc in hits if s.id not in seen]
+
+    user = prompts.OUTPUT_USER.format(
+        context=format_context(context_hits, max_chars=C.SECTION_MAX_CHARS),
+        conversation=conversation_text(messages),
+        segments="\n".join(f"[{i}] {s.text}" for i, s in enumerate(segs, 1)),
+    )
+    system = prompts.OUTPUT_SYSTEM
+    n = max(1, C.OUTPUT_SAMPLES)
+    if n == 1:
+        vote = await _judge_output(user, segs, system)
+        return {**vote, "category": "normal"} if vote else default
+
+    need = n // 2 + 1
+    tasks = [asyncio.create_task(_judge_output(user, segs, system)) for _ in range(n)]
+    votes: list[dict] = []
+    try:
+        for fut in asyncio.as_completed(tasks):
+            try:
+                vote = await fut
+            except Exception as e:
+                log_error("guard.output_sample", e)
+                continue
+            if vote is None:
+                continue
+            votes.append(vote)
+            bad = sum(not v["grounded"] for v in votes)
+            if bad >= need or len(votes) - bad >= need:
+                break
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+            elif not t.cancelled():
+                t.exception()
+    if not votes:
+        return default
+    return {**combine_votes(votes), "category": "normal"}
 
 
 async def handle(req: dict, kb: KnowledgeBase) -> dict:
