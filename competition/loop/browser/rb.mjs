@@ -357,12 +357,46 @@ try {
     try {
       await closeDialog();
       if (cmd === "submit") {
+        // 탭이 뒤에 있거나 창이 최소화돼 화면을 그리지 않는 상태에서는 클릭이 먹지 않는다
+        // (2026-11-17: 크롬을 새로 띄운 뒤 누른 클릭이 무시돼, 8분 동안 채점 요청이 한 건도 오지 않았다).
+        // 창을 되살리고 탭을 앞으로 가져온 뒤, 화면이 실제로 그려지는지(화면 저장이 5초 안에 끝나는지) 확인하고 나서만 누른다.
+        try {
+          const { windowId, bounds } = await c.send("Browser.getWindowForTarget");
+          if (bounds && bounds.windowState === "minimized")
+            await c.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
+        } catch {}
+        await c.send("Page.bringToFront").catch(() => {});
+        await sleep(800);
+        const visible = await evalJs(c, "document.visibilityState");
+        const drawn = await Promise.race([
+          c.send("Page.captureScreenshot", { format: "jpeg", quality: 10 }).then(() => true, () => false),
+          sleep(5000).then(() => false),
+        ]);
+        if (visible !== "visible" || !drawn)
+          throw new Error(`엘리스 탭이 화면에 그려지지 않는 상태입니다 (visibility=${visible}, 화면 저장=${drawn}). 누르지 않았습니다.`);
         const b = await spot("submit");
         if (!b || b.x === undefined) throw new Error(`'제출' 버튼이 ${b ? b.n : 0}개입니다 (정확히 1개일 때만 누릅니다).`);
         if (b.disabled) throw new Error("'제출' 버튼이 비활성입니다 (채점이 진행 중일 수 있습니다).");
         fs.writeFileSync(stamp, String(Date.now()));
         await press(b);
         console.error("제출했습니다. 결과를 기다립니다…");
+        // 누른 것이 실제로 먹었는지 확인한다: 채점이 시작되면 '제출' 버튼이 비활성·로딩으로 바뀌거나 글자가 바뀌고, 끝나면 채점 창이 뜬다.
+        // 30초 동안 아무 표시가 없으면 기다리지 않고 알린다(다시 누르기 전에 서버 로그로 채점 요청이 왔는지 반드시 확인한다).
+        let started = false;
+        for (let i = 0; i < 15 && !started; i++) {
+          await sleep(2000);
+          started = await evalJs(
+            c,
+            `(() => {
+              const vis = (e) => e.offsetParent !== null;
+              const sub = [...document.querySelectorAll("button")].filter((x) => vis(x) && (x.innerText || "").trim() === "제출");
+              const dlg = [...document.querySelectorAll("[role=dialog],[role=alertdialog]")].some((d) => (d.innerText || "").includes("채점"));
+              return dlg || sub.length !== 1 || sub.some((x) => x.disabled || x.className.includes("loading") || !!x.querySelector("[role=progressbar]"));
+            })()`
+          );
+        }
+        if (!started)
+          throw new Error("NOT_STARTED: 제출을 눌렀지만 30초 동안 채점이 시작된 표시가 없습니다(버튼이 그대로입니다). 서버 로그로 채점 요청이 왔는지 확인하세요.");
       } else {
         const h = await spot("history");
         if (!h) throw new Error("제출 기록 버튼을 찾지 못했습니다 (이 화면에서 제출한 적이 없으면 보이지 않습니다).");

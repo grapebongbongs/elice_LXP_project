@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass
 
 from app import config
-from app.common import fewshot, focus, llm
+from app.common import embed, fewshot, focus, llm
 from app.common.kb import KnowledgeBase, Section, conversation_text, format_context, retrieval_query
 from app.common.logging_util import log_error
 from app.common.schema import locate_span
@@ -134,6 +134,39 @@ def restore_span(seg: Segment, span) -> str:
     return text
 
 
+# ---------------------------------------------------------------- 문장별 가까운 자료 문장 (임베딩)
+_KB_UNITS: list[tuple[str, str]] | None = None
+
+
+def kb_units(kb: KnowledgeBase) -> list[tuple[str, str]]:
+    """자료를 문장(표는 행) 단위로 나눈 목록 [(섹션 id, 문장)]. 튜터가 답에 덧붙일 때 쓰는 단위와 같다."""
+    global _KB_UNITS
+    if _KB_UNITS is None:
+        from app.tutor.pipeline import section_units
+
+        _KB_UNITS = [(s.id, text) for s in kb.sections.values() for text, _ in section_units(s)]
+    return _KB_UNITS
+
+
+async def aligned_sentences(segs: list[Segment], context_hits, kb: KnowledgeBase) -> str:
+    """후보 답변의 문장마다 뜻이 가장 가까운 자료 문장 OUTPUT_ALIGN 개를 찾아 '[번호] (섹션) 문장 / (섹션) 문장' 줄로 적는다.
+
+    꺼져 있거나 임베딩을 쓸 수 없으면 빈 문자열(그때는 지금까지와 똑같이 판정한다).
+    """
+    if C.OUTPUT_ALIGN <= 0 or not await embed.ensure(kb_units(kb)):
+        return ""
+    vecs = await embed.embed([_CITE.sub(" ", s.text) for s in segs])
+    if vecs is None:
+        return ""
+    sids = None if C.OUTPUT_ALIGN_SCOPE == "all" else [s.id for s, _ in context_hits]
+    lines = []
+    for i, v in enumerate(vecs, 1):
+        near = embed.nearest(v, sids, C.OUTPUT_ALIGN)
+        if near:
+            lines.append(f"[{i}] " + " / ".join(f"({sid}) {text}" for _, sid, text in near))
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- 답변 판정
 async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) -> dict:
     default = {"grounded": True, "unsupported": [], "safe": True, "category": "normal"}
@@ -152,14 +185,19 @@ async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) 
         conversation=conversation_text(messages),
         segments="\n".join(f"[{i}] {s.text}" for i, s in enumerate(segs, 1)),
     )
+    system = prompts.OUTPUT_SYSTEM
+    aligned = await aligned_sentences(segs, context_hits, kb)
+    if aligned:
+        system += prompts.OUTPUT_ALIGNED_NOTE
+        user += prompts.OUTPUT_ALIGNED.format(aligned=aligned)
     n = max(1, C.OUTPUT_SAMPLES)
     if n == 1:
-        vote = await _judge_output(user, segs)
+        vote = await _judge_output(user, segs, system)
         return {**vote, "category": "normal"} if vote else default
 
     # 같은 판정을 n 번 동시에 보내고 과반으로 정한다. 과반이 정해지면 남은 호출은 기다리지 않는다.
     need = n // 2 + 1
-    tasks = [asyncio.create_task(_judge_output(user, segs)) for _ in range(n)]
+    tasks = [asyncio.create_task(_judge_output(user, segs, system)) for _ in range(n)]
     votes: list[dict] = []
     try:
         for fut in asyncio.as_completed(tasks):
@@ -185,10 +223,10 @@ async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) 
     return {**combine_votes(votes), "category": "normal"}
 
 
-async def _judge_output(user: str, segs: list[Segment]) -> dict | None:
+async def _judge_output(user: str, segs: list[Segment], system: str = prompts.OUTPUT_SYSTEM) -> dict | None:
     """답변 판정 호출 한 번. 응답이 비었으면 None."""
     out = await llm.chat_json(
-        prompts.OUTPUT_SYSTEM, user, reasoning_effort=C.OUTPUT_REASONING_EFFORT, max_tokens=C.MAX_TOKENS
+        system, user, reasoning_effort=C.OUTPUT_REASONING_EFFORT, max_tokens=C.MAX_TOKENS
     )
     if not out:
         return None

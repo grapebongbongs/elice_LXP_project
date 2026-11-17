@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""근거 문장 덧붙이기(TUTOR_APPEND_QUOTE)의 판정 효과를, 같은 답에서 붙인 것과 뗀 것으로 짝지어 잰다. 런박스에서 실행한다.
+"""답 끝에 덧붙인 자료 문장(TUTOR_APPEND_QUOTE, TUTOR_APPEND_CONTEXT)의 판정 효과를, 같은 답에서 붙인 것과 뗀 것으로 짝지어 잰다. 런박스에서 실행한다.
 
     python3 loop/exp_run.py --name quote-append --part tutor --env TUTOR_APPEND_QUOTE=1 --env EXP_DEBUG=1
-    python3 loop/quote_judge_eval.py quote-append --repeat 2
+    python3 loop/quote_judge_eval.py quote-append --repeat 2                 # 근거 문장을 붙인 답 / 뗀 답
+    python3 loop/quote_judge_eval.py context3 --note context --repeat 2      # 관련 문장까지 붙인 답 / 근거 문장만 남긴 답
 
 - 서버는 띄우지 않는다. 저장된 실행(baseline/results/<이름>_run*.jsonl)의 튜터 답 가운데 근거 문장이 붙은 것을 골라,
   붙은 답과 그 문장을 뗀 답을 채점기의 판정(grader/judge.py 의 facts·faithful)에 그대로 넣는다. 근거 자료는 채점기와 같이 인용한 섹션의 글이다.
@@ -27,11 +28,15 @@ import score_local as sl  # noqa: E402
 sys.path.insert(0, str(ROOT / "baseline"))
 from app.tutor import prompts  # noqa: E402
 
-MARK = " " + prompts.QUOTE_NOTE.split("{quote}")[0]  # ' 자료에는 이렇게 적혀 있어요: "'
+MARKS = {
+    "quote": " " + prompts.QUOTE_NOTE.split("{quote}")[0],  # ' 자료에는 이렇게 적혀 있어요: "'
+    "context": " " + prompts.CONTEXT_NOTE.split("{sentences}")[0],  # ' 함께 보면 좋은 자료 문장: '
+}
+MARK = MARKS["quote"]
 
 
 def strip_note(answer: str) -> str | None:
-    """근거 문장을 붙이기 전의 답. 붙은 문장이 없으면 None."""
+    """덧붙인 문장(MARK 부터 끝까지)을 뗀 답. 개인정보 안내 문장은 남긴다. 붙은 문장이 없으면 None."""
     i = answer.find(MARK)
     if i < 0:
         return None
@@ -50,7 +55,10 @@ def main():
     ap.add_argument("--repeat", type=int, default=2)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--show", type=int, default=8, help="tune 에서 판정이 달라진 문항을 몇 개까지 보여 줄지")
+    ap.add_argument("--note", choices=sorted(MARKS), default="quote", help="어느 덧붙임을 떼어 견줄지")
     a = ap.parse_args()
+    global MARK
+    MARK = MARKS[a.note]
 
     files = []
     for n in a.names:
@@ -85,7 +93,7 @@ def main():
             rows.append({"id": x["id"], "holdout": x["holdout"], "gold_action": lab["action"], "gold_facts": lab.get("gold_facts") or [],
                          "full": resp["answer"], "base": base, "texts": texts})
     n_calls = sum((2 if r["gold_facts"] else 0) + 2 for r in rows) * a.repeat
-    print(f"실행 {len(files)}개: answer 로 답한 {answered}건 중 근거 문장이 붙은 답 {len(rows)}건 ({len(rows) / max(answered, 1):.0%}), 판정 호출 {n_calls}개")
+    print(f"실행 {len(files)}개: answer 로 답한 {answered}건 중 덧붙인 문장({a.note})이 있는 답 {len(rows)}건 ({len(rows) / max(answered, 1):.0%}), 판정 호출 {n_calls}개")
 
     jobs = []
     for i, r in enumerate(rows):

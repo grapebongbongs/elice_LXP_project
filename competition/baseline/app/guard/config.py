@@ -63,3 +63,10 @@ INPUT_TOP_K = int(os.getenv("GUARD_INPUT_TOP_K", "3"))
 # 공개 세트에서 block 이면서 후보 답변이 있는 19건 전부가 grounded=true·unsupported 없음
 # (막힌 요청에 대한 답은 수업 사실을 지어낸 것으로 보지 않음). 0 이면 LLM 판정 사용.
 GROUNDED_FROM_BLOCK = os.getenv("GUARD_GROUNDED_FROM_BLOCK", "1") == "1"
+
+# OUTPUT_ALIGN: 답변 검증에서 후보 답변의 문장마다 뜻이 가장 가까운 자료 문장을 이 개수만큼 찾아 함께 보여 준다(0 이면 끔).
+#   자료 문장 임베딩은 서버를 띄울 때 만들고(app/common/embed.py), 요청마다 후보 답변의 문장만 임베딩한다(호출 1번).
+#   임베딩 호출이 실패하거나 늦으면 붙이지 않고 그대로 판정한다.
+# OUTPUT_ALIGN_SCOPE: context = 판정에 보여 주는 섹션 안에서만 찾는다, all = 자료 전체에서 찾는다.
+OUTPUT_ALIGN = int(os.getenv("GUARD_OUTPUT_ALIGN", "0"))
+OUTPUT_ALIGN_SCOPE = os.getenv("GUARD_OUTPUT_ALIGN_SCOPE", "context")

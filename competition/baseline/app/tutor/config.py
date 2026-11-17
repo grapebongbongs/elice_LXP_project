@@ -78,6 +78,15 @@ QUOTE_MIN_COVERAGE = float(os.getenv("TUTOR_QUOTE_MIN_COVERAGE", "0.8"))  # quot
 # 실측(튜터 2회, 0 으로 두고): 근거 문장 없이 유지된 답 2건은 action 과 인용은 맞았지만 내용이 틀려 정답 사실 0·근거 불충실로 판정됐다
 # (근거 문장을 못 옮긴 답은 자료와 다른 내용을 말한 답이었다). 틀린 답을 내보내게 되므로 1(abstain)을 유지한다.
 QUOTE_FAIL_ABSTAIN = os.getenv("TUTOR_QUOTE_FAIL_ABSTAIN", "1") == "1"
+# QUOTE_FAIL_EXTRACT: 1차 생성이 답은 했지만 옮겨 적은 근거 문장을 자료에서 못 찾았을 때(first_why == "quote"),
+#   고정 abstain 문장 대신 검색 1위 섹션에서 질문과 가장 가까운 문장을 이 개수만큼 그대로 옮겨 answer 로 답한다(0 이면 끔).
+#   모델이 쓴 글은 넣지 않는다(#56: 그 글은 내용이 틀린 경우가 많았다). 문장 고르기는 APPEND_CONTEXT 와 같은 방식(섹션 안 BM25)이다.
+#   근거: 저장된 공개 세트 실행에서 이 경우 9건(tune 6, holdout 3)이 모두 정답 answer 였고, 자료에 없는 질문 59건은 전부 모델이 스스로
+#   abstain 했다. tune 6건은 검색 1위가 정답 근거였고(전체로는 9건 중 7건), 고른 문장 2개가 6건 모두 정답 사실을 담았다(글자 bigram 0.68 이상).
+#   채점식: 지금은 (action 0 + 인용 0 + 정답 사실 0 + 근거 충실 1)/4 = 0.25, 바꾸면 action 1·근거 충실 1 에 인용과 정답 사실이 더해진다.
+#   실측(11/17, LOOP.md #79): 저장된 18회 실행에서 이 경우 20건(tune 16, holdout 4)이 전부 정답 answer. 튜터 2회(`quote-fail-extract`)에서
+#   이 경로를 탄 4건(tune 2, holdout 2) 모두 정답 answer 이고 문항 점수가 0.25 → 1.0·1.0·1.0·0.5, 로컬 판정의 근거 충실 4/4.
+QUOTE_FAIL_EXTRACT = int(os.getenv("TUTOR_QUOTE_FAIL_EXTRACT", "2"))
 
 # answer 응대의 답 끝에 근거 문장(모델이 자료에서 옮겨 적은 quote)을 그대로 덧붙인다 (0 이면 끔). app/tutor/pipeline.py 의 append_quote
 # 정답 사실은 문항마다 자료의 한 문장인데, 답이 그 문장을 풀어 쓰면서 값·이름·조건의 일부를 빼먹는 일이 있다.
@@ -91,6 +100,28 @@ QUOTE_FAIL_ABSTAIN = os.getenv("TUTOR_QUOTE_FAIL_ABSTAIN", "1") == "1"
 #   APPEND_QUOTE_MIN_CHARS: 공백·문장부호를 뺀 근거 문장이 이보다 짧으면 붙이지 않는다
 APPEND_QUOTE = os.getenv("TUTOR_APPEND_QUOTE", "1") == "1"
 APPEND_QUOTE_MIN_CHARS = int(os.getenv("TUTOR_APPEND_QUOTE_MIN_CHARS", "8"))
+
+# answer 응대의 답 끝에, 인용한 섹션에서 질문과 가장 가까운 문장을 이 개수만큼 원문 그대로 덧붙인다 (0 이면 끔).
+# app/tutor/pipeline.py 의 append_context. 문장은 섹션 안 BM25(질의: 마지막 발화 2회 + 이전 발화 3개)로 고르고, 답에 이미 있는 문장·코드 줄은 뺀다.
+# 계기: 근거 문장 덧붙이기(APPEND_QUOTE)가 실제 튜터를 88.36 → 90.83 으로 올렸다(로컬 판정으로는 차이 0). 실제 판정 모델은 자료 문장 그대로를
+# 더 인정한다. 그런데 근거 문장이 정답 사실과 다른 문장인 답이 많다.
+# 저장된 실행 7회(정답 answer 이고 answer 로 답한 726건)에서 정답 사실의 글자 bigram 이 답에 0.6 이상 든 비율:
+#   근거 문장까지 붙인 지금 방식 tune 62%·holdout 56% (답만이면 51%·45% 안팎) → 문장 1개 더 77%·82% → 2개 86%·83% → 3개 90%·86% → 4개 93%·89%.
+#   더 붙는 글자 수는 평균 48 / 95 / 139 / 185자.
+#   APPEND_CONTEXT_UNIT_CHARS: 이보다 긴 문장은 붙이지 않는다.  APPEND_CONTEXT_MAX_CHARS: 붙이는 문장 전체의 글자 수 상한
+# 구현을 그대로 저장된 답 726건에 적용한 값(큰따옴표 문장·질문 문장 제외, 거의 같은 문장 건너뛰기 포함): 근거 문장만 62.1%·56.6% →
+#   1개 78.0%·83.4% → 2개 86.9%·83.4% → 3개 90.0%·85.7% → 4개 91.1%·88.6%. 답 전체 길이는 평균 114자 → 3개일 때 273자(최대 446자).
+# 공개 세트(튜터 1회, context3, 3개): 튜터 91.5, 규칙 기반 점수 0.915, 정답 사실 0.899 (quote-append 0.857), 근거 충실 0.973, 가장 느린 응답 11.3초.
+#   응함 0점 5개는 고정 문장 4개와 action 오류 1개로 이 변경과 무관하다. answer 로 답한 108건 중 107건에 문장이 붙었다.
+# 같은 답에서 붙인 것과 뗀 것의 로컬 판정(2번씩): 정답 사실 tune 0.949 → 0.981·holdout 0.938 → 0.938, 근거 충실 tune 0.951 → 0.970·holdout 0.920 → 0.900(1건).
+# 사용자 결정(11/16)으로 3개를 켜고 제출로 견줬다.
+# 실제 제출(c15a516, 11/16 20:27): 89.97 (튜터 89.17, 가드 90.77). 이것만 뺀 17adfc1 의 튜터는 90.83 / 89.92 다.
+# 글자 겹침은 크게 늘었지만 실제 튜터 점수는 오르지 않았다(한 번의 제출, 튜터 흔들림 ±0.75). 근거 문장 하나로 이미 얻을 만큼 얻은 것으로 보고 꺼 둔다.
+#   APPEND_CONTEXT_SKIP_OVERLAP: 문장의 글자 bigram 중 이 비율 이상이 답에 이미 있으면 같은 말로 보고 건너뛴다
+APPEND_CONTEXT = int(os.getenv("TUTOR_APPEND_CONTEXT", "0"))
+APPEND_CONTEXT_SKIP_OVERLAP = float(os.getenv("TUTOR_APPEND_CONTEXT_SKIP_OVERLAP", "0.8"))
+APPEND_CONTEXT_UNIT_CHARS = int(os.getenv("TUTOR_APPEND_CONTEXT_UNIT_CHARS", "200"))
+APPEND_CONTEXT_MAX_CHARS = int(os.getenv("TUTOR_APPEND_CONTEXT_MAX_CHARS", "420"))
 
 # answer 생성 1차 시도에 보여 줄 검색 상위 섹션 수 (0 이면 처음부터 TOP_K 개를 모두 보여 준다).
 # 실측(전체 2회, SPECULATIVE 와 함께): 튜터 84.44 → 86.81, 인용 F1 0.83 → 0.88, 근거 충실 0.88 → 0.90, p95 지연 11.4초 → 10.3초.
@@ -149,3 +180,17 @@ OOM_RECHECK = os.getenv("TUTOR_OOM_RECHECK", "0") == "1"
 # 공개 라벨에서 이 범주는 전부 scaffold·근거 없음·정답 사실 없음이고, 생성한 힌트가 내용을 너무 담아 '응함'으로 판정된 사례가 있었다.
 # 실측(전체 2회씩): 생성한 힌트가 '응함'으로 판정된 문항이 회당 3개 → 0개.
 ACADEMIC_TEMPLATE = os.getenv("TUTOR_ACADEMIC_TEMPLATE", "1") == "1"
+
+# EXTRACTIVE: answer 응대의 답을 모델이 새로 쓰지 않고, 근거 섹션의 문장(표는 행)에 번호를 붙여 보여 준 뒤 질문에 답이 되는
+#   문장의 번호만 고르게 한다. 답은 고른 문장 그대로(최대 EXTRACTIVE_MAX 개)이고 인용은 그 섹션이다.
+#   계기(11/17): 실제 판정은 자료 원문을 로컬 판정보다 더 인정하고(#69), 모델이 풀어 쓴 글은 값·조건이 빠지거나 달라질 수 있다.
+#   고르기만 하면 출력이 짧아 응답도 빨라진다. 답이 없으면 모델이 abstain 을 고르고, 그때는 지금과 같은 고정 문장으로 답한다.
+#   실측(11/17, LOOP.md #84): 튜터 2회씩. 정답 answer 문항의 문항 점수 tune 0.914 → 0.930·holdout 0.907 → 0.903, 정답 사실 글자 겹침 0.6 이상
+#   0.637 → 0.801·0.596 → 0.706, 로컬 판정의 정답 사실 0.869 → 0.887·0.852 → 0.796, 근거 충실 0.976 → 0.976·0.907 → 1.0, p95 지연 8.7 → 6.6초.
+#   로컬 판정으로는 같은 수준이라, 사용자 지시(11/17)에 따라 실제 제출 평균으로 견준다. 끄려면 TUTOR_EXTRACTIVE=0.
+EXTRACTIVE = os.getenv("TUTOR_EXTRACTIVE", "1") == "1"
+EXTRACTIVE_MAX = int(os.getenv("TUTOR_EXTRACTIVE_MAX", "3"))
+# EXTRACTIVE_ASKED: 모델이 적은 "질문이 묻는 것" 한 구절을 답의 머리말로 둔다("…에 대해 자료에는 이렇게 적혀 있어요: …").
+#   고른 문장이 "이 카드의 하루 사용 한도는 3만 원이에요."처럼 대상의 이름 없이 시작하는 일이 있다(tune 정답 사실 84개 중 19개).
+EXTRACTIVE_ASKED = os.getenv("TUTOR_EXTRACTIVE_ASKED", "1") == "1"
+EXTRACTIVE_ASKED_MAX = int(os.getenv("TUTOR_EXTRACTIVE_ASKED_MAX", "40"))

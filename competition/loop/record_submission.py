@@ -133,6 +133,7 @@ def main():
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--min-gain", type=float, default=0.5, help="이만큼 넘게 올라야 최고점으로 인정 (표본 흔들림 방지)")
     ap.add_argument("--trailer", default="", help="최고점 커밋 메시지 끝에 붙일 줄 (예: Co-Authored-By: …)")
+    ap.add_argument("--no-best", action="store_true", help="기록만 하고 best/ 브랜치와 BEST.md 는 건드리지 않는다 (이미 최고인 커밋을 되풀이 제출할 때: 평균이 바뀔 때마다 브랜치가 새로 생기는 것을 막는다)")
     a = ap.parse_args()
 
     subs = load()
@@ -163,6 +164,9 @@ def main():
 
     mine = by_commit(subs)[commit]
     mean = statistics.mean(mine)
+    if a.no_best:
+        print(f"기록만 했습니다(--no-best): 이 커밋 평균 {mean:.2f} (같은 커밋 {len(mine)}회). best/ 브랜치와 BEST.md 는 그대로입니다.")
+        return
     if old_best is None or mean > old_best + a.min_gain:
         branch = f"best/{mean:.2f}-{commit}"
         write_best(commit, mean, len(mine), old_best_commit, a.note, sub)

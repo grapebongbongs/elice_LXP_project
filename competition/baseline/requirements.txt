@@ -2,3 +2,4 @@ fastapi>=0.110
 uvicorn>=0.29
 openai>=1.40
 httpx>=0.27
+numpy>=1.26  # 자료 문장 임베딩의 유사도 계산(app/common/embed.py). 없으면 임베딩 기능만 꺼진다

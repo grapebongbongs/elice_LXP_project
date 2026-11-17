@@ -35,6 +35,15 @@ async def lifespan(app: FastAPI):
     # 색인 같은 준비 작업은 서버 시작 때 끝낸다
     STATE["kb"] = KnowledgeBase(config.KB_DIR)
     fewshot.init()
+    # 임베딩을 쓰는 설정이 켜져 있으면 자료 문장 임베딩을 서버 시작 때 만들어 둔다(요청 처리 중에는 만들지 않는다)
+    from app.guard import config as guard_config
+    from app.guard import pipeline as guard_pipeline
+
+    if guard_config.OUTPUT_ALIGN > 0:
+        from app.common import embed
+
+        ok = await embed.ensure(guard_pipeline.kb_units(STATE["kb"]))
+        print(f"[server] 자료 문장 임베딩: {'준비됨' if ok else '쓸 수 없음(임베딩 없이 동작)'}")
     if not config.SERVER_TOKEN:
         print("[server] WARNING: SERVER_TOKEN 미설정 - 인증 없이 동작합니다 (로컬 테스트용)")
     if config.LLM_MOCK:
