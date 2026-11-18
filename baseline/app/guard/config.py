@@ -26,4 +26,4 @@ GROUNDED_FROM_BLOCK = os.getenv("GUARD_GROUNDED_FROM_BLOCK", "1") == "1"
 
 # normal/answer_seeking 은 '정답만' 표지 유무로 정한다(공개 세트 400건에서 예외 없음)
 ANSWER_ONLY_MARKER = os.getenv("GUARD_ANSWER_ONLY_MARKER", "1") == "1"
-OUTPUT_SAMPLES = int(os.getenv("GUARD_OUTPUT_SAMPLES", "5"))
+OUTPUT_SAMPLES = int(os.getenv("GUARD_OUTPUT_SAMPLES", "3"))
