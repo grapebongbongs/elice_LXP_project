@@ -46,7 +46,6 @@ def _input_vote_from_out(out: dict | None, messages: list[dict]) -> tuple[str, s
 async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> dict:
     if not messages or (config.LOW_SIGNAL_RULE and focus.is_low_signal(messages)):
         return {"decision": "allow", "category": "low_signal_input"}
-    messages = focus.without_wrappers(messages)
     system, user = prompts.INPUT_SYSTEM, prompts.INPUT_USER.format(conversation=conversation_text(messages))
     if kb is not None and C.INPUT_USE_MATERIAL:
         hits = kb.search(retrieval_query(messages), k=C.INPUT_TOP_K)
