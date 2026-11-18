@@ -30,7 +30,7 @@ FOCUS_NAMES = os.getenv("TUTOR_FOCUS_NAMES", "override,pii,scam,submit,offtask")
 # 실제 제출(11/16 16:40, 커밋 89fd6df, 가드 변경 두 가지와 함께): 튜터 88.17. 같은 날 305fa8c 의 튜터는 89.25 / 88.33 / 88.42 로 차이가 없다.
 # 다른 변경을 제출로 견줄 때 기준(305fa8c)과 같게 두려고 꺼 둔다(비워 두면 모두 한 번만 부른다).
 FOCUS_VOTE_NAMES = os.getenv("TUTOR_FOCUS_VOTE_NAMES", "override,submit")
-CLASSIFY_SAMPLES = int(os.getenv("TUTOR_CLASSIFY_SAMPLES", "1"))
+CLASSIFY_SAMPLES = int(os.getenv("TUTOR_CLASSIFY_SAMPLES", "3"))
 CLASSIFY_REASONING_EFFORT = os.getenv("TUTOR_CLASSIFY_REASONING_EFFORT", "low")
 CLASSIFY_MAX_TOKENS = int(os.getenv("TUTOR_CLASSIFY_MAX_TOKENS", "1500"))
 
@@ -60,7 +60,7 @@ ENGLISH_QUERY_RATIO = float(os.getenv("TUTOR_ENGLISH_QUERY_RATIO", "0.5"))
 #   QUERY_KO_GLOSSARY: 1 이면 수업 목차(섹션 제목)를 함께 보여 주고 문장 전체를 옮기게 한다 (prompts.QUERY_KO_GLOSSARY_SYSTEM)
 #   QUERY_KO_EFFORT  : 변환 호출의 추론 수준
 # 실측(loop/query_ko_eval.py, 검색만): 근거 섹션 1위가 한 번 tune 35/36·holdout 27/42, 세 번 합치기 35/36·25/42, 목차 16/18·14/21 → 둘 다 꺼 둔다.
-QUERY_KO_SAMPLES = int(os.getenv("TUTOR_QUERY_KO_SAMPLES", "3"))
+QUERY_KO_SAMPLES = int(os.getenv("TUTOR_QUERY_KO_SAMPLES", "1"))
 QUERY_KO_GLOSSARY = os.getenv("TUTOR_QUERY_KO_GLOSSARY", "0") == "1"
 QUERY_KO_EFFORT = os.getenv("TUTOR_QUERY_KO_EFFORT", "minimal")
 QUERY_KO_MAX_TOKENS = int(os.getenv("TUTOR_QUERY_KO_MAX_TOKENS", "400"))
