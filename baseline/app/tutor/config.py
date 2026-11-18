@@ -59,7 +59,7 @@ ENGLISH_QUERY_RATIO = float(os.getenv("TUTOR_ENGLISH_QUERY_RATIO", "0.5"))
 #   QUERY_KO_GLOSSARY: 1 이면 수업 목차(섹션 제목)를 함께 보여 주고 문장 전체를 옮기게 한다 (prompts.QUERY_KO_GLOSSARY_SYSTEM)
 #   QUERY_KO_EFFORT  : 변환 호출의 추론 수준
 # 실측(loop/query_ko_eval.py, 검색만): 근거 섹션 1위가 한 번 tune 35/36·holdout 27/42, 세 번 합치기 35/36·25/42, 목차 16/18·14/21 → 둘 다 꺼 둔다.
-QUERY_KO_SAMPLES = int(os.getenv("TUTOR_QUERY_KO_SAMPLES", "1"))
+QUERY_KO_SAMPLES = int(os.getenv("TUTOR_QUERY_KO_SAMPLES", "3"))
 QUERY_KO_GLOSSARY = os.getenv("TUTOR_QUERY_KO_GLOSSARY", "0") == "1"
 QUERY_KO_EFFORT = os.getenv("TUTOR_QUERY_KO_EFFORT", "minimal")
 QUERY_KO_MAX_TOKENS = int(os.getenv("TUTOR_QUERY_KO_MAX_TOKENS", "400"))
