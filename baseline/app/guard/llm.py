@@ -21,11 +21,13 @@ def log_llm(tag: str, elapsed_ms: float, outcome: str, attempt: int = 1) -> None
     """기존 가드의 메타데이터 로그 형식. 본문은 남기지 않는다."""
     logger.info(f"llm tag={tag or '-'} attempt={attempt} ms={elapsed_ms:.0f} outcome={outcome}")
 
+
 _client: AsyncOpenAI | None = None
 _sem = shared_llm._sem  # 튜터와 합산한 전역 동시성 상한을 유지한다.
 # 모델이 reasoning_effort 를 지원하지 않으면 한 번 실패 후 끈다
 _supports_effort = True
 MAX_COMPLETION_TOKENS = 2000
+INPUT_HEDGE_AFTER = 8.0
 
 
 def client() -> AsyncOpenAI:
@@ -57,6 +59,75 @@ def _parse_json(text: str) -> dict | None:
     return None
 
 
+async def _call_once(
+    kwargs: dict[str, Any],
+    tag: str,
+    attempt: int,
+    started: asyncio.Event | None = None,
+) -> dict[str, Any] | None:
+    """LLM 호출 한 번. 걸린 시간·결과만 로그에 남긴다(본문 없음)."""
+    global _supports_effort
+    t0 = time.perf_counter()
+    try:
+        async with _sem:
+            if started is not None:
+                started.set()  # 동시 호출 자리를 얻어 실제로 호출을 시작했다
+            try:
+                resp = await client().chat.completions.create(**kwargs)
+            except BadRequestError as e:
+                # reasoning_effort 때문에 거절된 경우에만 끄고 재시도 (다른 400은 그대로 올림)
+                if "extra_body" not in kwargs or "reasoning" not in str(e).lower():
+                    raise
+                _supports_effort = False
+                clean_kwargs = {k: v for k, v in kwargs.items() if k != "extra_body"}
+                resp = await client().chat.completions.create(**clean_kwargs)
+    except asyncio.CancelledError:
+        # 요청 마감(REQUEST_DEADLINE) 또는 헤지 승자에 의해 끊긴 경우
+        log_llm(tag, (time.perf_counter() - t0) * 1000, "cancelled", attempt=attempt)
+        raise
+    except Exception as e:
+        log_llm(tag, (time.perf_counter() - t0) * 1000, type(e).__name__, attempt=attempt)
+        raise
+    ms = (time.perf_counter() - t0) * 1000
+    choice = resp.choices[0]
+    out = _parse_json(choice.message.content or "")
+    log_llm(tag, ms, _outcome(choice, out), attempt=attempt)
+    return out
+
+
+async def _call_hedged(
+    kwargs: dict[str, Any],
+    tag: str,
+    hedge_after: float,
+) -> dict[str, Any] | None:
+    """호출이 hedge_after 초 안에 끝나지 않으면 동일 kwargs로 2번째 호출을 보내 먼저 끝난 쪽을 쓴다."""
+    started = asyncio.Event()
+    tasks = [asyncio.create_task(_call_once(kwargs, tag, 1, started))]
+    try:
+        if hedge_after > 0:
+            waiter = asyncio.create_task(started.wait())
+            try:
+                await asyncio.wait({tasks[0], waiter}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                waiter.cancel()
+            done, _ = await asyncio.wait(tasks, timeout=hedge_after)
+            if not done:
+                tasks.append(asyncio.create_task(_call_once(dict(kwargs), tag, 2)))
+        pending = set(tasks)
+        last_exc: BaseException | None = None
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for t in done:
+                if t.exception() is None:
+                    return t.result()
+                last_exc = t.exception()
+        raise last_exc
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+
+
 async def chat_json(
     system: str,
     user: str,
@@ -66,7 +137,6 @@ async def chat_json(
     tag: str = "",
 ) -> dict[str, Any] | None:
     """system/user 프롬프트로 JSON 객체 하나를 받는다. 실패하면 None."""
-    global _supports_effort
     if config.LLM_MOCK:
         return None
 
@@ -85,30 +155,9 @@ async def chat_json(
     if _supports_effort and reasoning_effort:
         kwargs["extra_body"] = {"reasoning_effort": reasoning_effort}
 
-    t0 = time.perf_counter()
-    try:
-        async with _sem:
-            try:
-                resp = await client().chat.completions.create(**kwargs)
-            except BadRequestError as e:
-                # reasoning_effort 때문에 거절된 경우에만 끄고 재시도 (다른 400 은 그대로 올림)
-                if "extra_body" not in kwargs or "reasoning" not in str(e).lower():
-                    raise
-                _supports_effort = False
-                kwargs.pop("extra_body")
-                resp = await client().chat.completions.create(**kwargs)
-    except asyncio.CancelledError:
-        # 요청 마감(REQUEST_DEADLINE)에 걸려 바깥에서 끊긴 경우
-        log_llm(tag, (time.perf_counter() - t0) * 1000, "cancelled")
-        raise
-    except Exception as e:
-        log_llm(tag, (time.perf_counter() - t0) * 1000, type(e).__name__)
-        raise
-    ms = (time.perf_counter() - t0) * 1000
-    choice = resp.choices[0]
-    out = _parse_json(choice.message.content or "")
-    log_llm(tag, ms, _outcome(choice, out))
-    return out
+    if tag == "guard.input":
+        return await _call_hedged(kwargs, tag, INPUT_HEDGE_AFTER)
+    return await _call_once(kwargs, tag, 1)
 
 
 def _outcome(choice: Any, out: dict | None) -> str:
