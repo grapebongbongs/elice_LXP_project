@@ -409,7 +409,7 @@ JSON 하나만 출력: {"mode": "offtask|course"}""",
 )
 
 # 적용 순서: 앞에 있는 판정의 pos 가 먼저 이긴다
-CHECKS: tuple[Check, ...] = (OVERRIDE_GUARD, PII, SCAM, SUBMIT, OFFTASK)
+CHECKS: tuple[Check, ...] = (OVERRIDE, PII, SCAM, SUBMIT, OFFTASK)
 CHECKS_GUARD: tuple[Check, ...] = (
     OVERRIDE_GUARD,
     replace(PII, downgrade=False),

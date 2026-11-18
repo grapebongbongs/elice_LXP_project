@@ -29,8 +29,8 @@ FOCUS_NAMES = os.getenv("TUTOR_FOCUS_NAMES", "override,pii,scam,submit,offtask")
 # 가드 문항에서는 차이가 없어(지시 우회 30/39 → 31/39, 사기 24/30 → 23/30, 과제 대행 32/36 → 31/36) 가드는 한 번만 부른다.
 # 실제 제출(11/16 16:40, 커밋 89fd6df, 가드 변경 두 가지와 함께): 튜터 88.17. 같은 날 305fa8c 의 튜터는 89.25 / 88.33 / 88.42 로 차이가 없다.
 # 다른 변경을 제출로 견줄 때 기준(305fa8c)과 같게 두려고 꺼 둔다(비워 두면 모두 한 번만 부른다).
-FOCUS_VOTE_NAMES = os.getenv("TUTOR_FOCUS_VOTE_NAMES", "override,pii,scam,submit")
-CLASSIFY_SAMPLES = int(os.getenv("TUTOR_CLASSIFY_SAMPLES", "3"))
+FOCUS_VOTE_NAMES = os.getenv("TUTOR_FOCUS_VOTE_NAMES", "override,submit")
+CLASSIFY_SAMPLES = int(os.getenv("TUTOR_CLASSIFY_SAMPLES", "1"))
 CLASSIFY_REASONING_EFFORT = os.getenv("TUTOR_CLASSIFY_REASONING_EFFORT", "low")
 CLASSIFY_MAX_TOKENS = int(os.getenv("TUTOR_CLASSIFY_MAX_TOKENS", "1500"))
 
@@ -126,7 +126,7 @@ APPEND_CONTEXT_MAX_CHARS = int(os.getenv("TUTOR_APPEND_CONTEXT_MAX_CHARS", "180"
 
 # answer 생성 1차 시도에 보여 줄 검색 상위 섹션 수 (0 이면 처음부터 TOP_K 개를 모두 보여 준다).
 # 실측(전체 2회, SPECULATIVE 와 함께): 튜터 84.44 → 86.81, 인용 F1 0.83 → 0.88, 근거 충실 0.88 → 0.90, p95 지연 11.4초 → 10.3초.
-FIRST_PASS_K = int(os.getenv("TUTOR_FIRST_PASS_K", "1"))
+FIRST_PASS_K = int(os.getenv("TUTOR_FIRST_PASS_K", "2"))
 
 # 이름 붙은 규칙·기준·등급을 "뭐야"라고 묻는데 그 이름이 검색 1위 섹션에 없으면 생성 결과와 상관없이 abstain 으로 답한다 (0 이면 끔).
 # app/common/focus.py 의 NAMED_RULE. 모델은 이런 질문에 같은 실습의 비슷한 문장을 근거로 대고 답하는 일이 반복됐다.
