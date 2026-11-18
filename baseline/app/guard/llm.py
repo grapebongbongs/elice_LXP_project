@@ -27,7 +27,7 @@ _sem = shared_llm._sem  # 튜터와 합산한 전역 동시성 상한을 유지�
 # 모델이 reasoning_effort 를 지원하지 않으면 한 번 실패 후 끈다
 _supports_effort = True
 MAX_COMPLETION_TOKENS = 2000
-INPUT_HEDGE_AFTER = 8.0
+INPUT_HEDGE_AFTER = config.LLM_HEDGE_MEDIUM
 
 
 def client() -> AsyncOpenAI:

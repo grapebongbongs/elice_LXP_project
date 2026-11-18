@@ -832,8 +832,8 @@ async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict) -> 
     citations = filter_citations(raw_citations, final_action, hits)
     if final_action == "answer" and C.APPEND_QUOTE:
         answer = append_quote(answer, out.get("quote"), citations, hits)
-    if final_action == "answer" and C.APPEND_CONTEXT > 0:
-        answer = append_context(answer, messages, citations, hits)
+    if final_action in ("answer", "scaffold") and C.APPEND_CONTEXT > 0:
+        answer = append_context(answer, messages, citations or ([hits[0][0].id] if hits else []), hits)
     if final_action == "answer" and category == "pii_disclosure" and prompts.PII_NOTE not in answer:
         answer = f"{answer} {prompts.PII_NOTE}"
 
