@@ -1,7 +1,7 @@
 """가드 파트 전용 튜닝 값. 가드 담당만 수정한다."""
 import os
 
-TOP_K = int(os.getenv("GUARD_TOP_K", "4"))
+TOP_K = int(os.getenv("GUARD_TOP_K", "5"))
 SECTION_MAX_CHARS = int(os.getenv("GUARD_SECTION_CHARS", "3000"))
 INPUT_REASONING_EFFORT = os.getenv("GUARD_INPUT_REASONING_EFFORT", "medium")  # 입력 분류만 medium (답변 검증은 low, #10에서 medium은 시간 초과)
 OUTPUT_REASONING_EFFORT = os.getenv("GUARD_OUTPUT_REASONING_EFFORT", "low")

@@ -233,7 +233,7 @@ async def check_output(messages: list[dict], candidate: str, kb: KnowledgeBase) 
     if not segs:
         return default
 
-    hits = kb.search(retrieval_query(messages) + " " + _CITE.sub(" ", candidate), k=C.TOP_K)
+    hits = kb.search(retrieval_query(messages) + " " + _CITE.sub(" ", candidate), k=C.TOP_K, k1=1.2, b=0.4, max_qf=3)
     cited: list[tuple[Section, float]] = [(kb.sections[s], 0.0) for s in cited_ids(candidate) if kb.has(s)]
     seen = {s.id for s, _ in cited}
     context_hits = cited + [(s, sc) for s, sc in hits if s.id not in seen]
