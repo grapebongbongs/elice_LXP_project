@@ -138,22 +138,59 @@ async def classify(messages: list[dict], hits=None, detail: dict | None = None) 
         user = prompts.CLASSIFY_USER.format(conversation=conversation_text(messages))
     user = fewshot.examples_block(messages) + user
     checks = focus.start_checks(messages, C.FOCUS_NAMES, C.FOCUS_VOTE_NAMES)  # 단서가 있으면 경계 판정을 주 분류와 동시에 시작
-    try:
-        out = await llm.chat_json(
-            system,
-            user,
-            reasoning_effort=C.CLASSIFY_REASONING_EFFORT,
-            max_tokens=C.CLASSIFY_MAX_TOKENS,
+    n_votes = max(1, C.CLASSIFY_SAMPLES)
+    need = n_votes // 2 + 1
+    tasks = [
+        asyncio.create_task(
+            llm.chat_json(
+                system,
+                user,
+                reasoning_effort=C.CLASSIFY_REASONING_EFFORT,
+                max_tokens=C.CLASSIFY_MAX_TOKENS,
+            )
         )
-    except BaseException:
-        for t in checks.values():
-            t.cancel()
-        raise
-    # 분류 실패 시 다수 범주(normal)로 진행 — 생성 프롬프트가 2차 방어
-    category = out.get("category") if out else "normal"
-    if category not in GUARD_CATEGORIES:
-        category = "normal"
-    harm_type = out.get("harm_type") if out and out.get("harm_type") in ("hate", "actionable") else None
+        for _ in range(n_votes)
+    ]
+    votes: list[tuple[str, str | None]] = []
+    counts: Counter = Counter()
+    chosen: tuple[str, str | None] | None = None
+    try:
+        try:
+            for fut in asyncio.as_completed(tasks):
+                try:
+                    out = await fut
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    continue
+                if not out:
+                    continue
+                cat = out.get("category")
+                if cat not in GUARD_CATEGORIES:
+                    cat = "normal"
+                ht = out.get("harm_type") if out.get("harm_type") in ("hate", "actionable") else None
+                counts[cat] += 1
+                votes.append((cat, ht))
+                if counts[cat] >= need:
+                    chosen = (cat, next((h for c, h in votes if c == cat and h is not None), ht))
+                    break
+        except BaseException:
+            for t in checks.values():
+                t.cancel()
+            raise
+    finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+            elif not t.cancelled():
+                t.exception()
+    if chosen is None:
+        if votes:
+            top_cat = counts.most_common(1)[0][0]
+            chosen = (top_cat, next((h for c, h in votes if c == top_cat and h is not None), None))
+        else:
+            chosen = ("normal", None)
+    category, harm_type = chosen
     detail = {} if detail is None else detail
     category = await focus.apply_checks(category, checks, detail)
     detail.update(main_harm=harm_type)

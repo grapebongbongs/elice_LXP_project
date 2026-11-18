@@ -46,9 +46,9 @@ def _input_vote_from_out(out: dict | None, messages: list[dict]) -> tuple[str, s
 async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> dict:
     if not messages or (config.LOW_SIGNAL_RULE and focus.is_low_signal(messages)):
         return {"decision": "allow", "category": "low_signal_input"}
+    messages = focus.without_wrappers(messages)
     system, user = prompts.INPUT_SYSTEM, prompts.INPUT_USER.format(conversation=conversation_text(messages))
     if kb is not None and C.INPUT_USE_MATERIAL:
-        # 질문과 가까운 자료를 함께 보여 줘야 '자료에 없는 값'(out_of_material)을 가려낼 수 있다
         hits = kb.search(retrieval_query(messages), k=C.INPUT_TOP_K)
         if hits:
             system = prompts.INPUT_SYSTEM + prompts.INPUT_MATERIAL_RULE
@@ -56,17 +56,7 @@ async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> 
                 context=format_context(hits, max_chars=C.SECTION_MAX_CHARS),
                 conversation=conversation_text(messages),
             )
-    n = max(1, C.INPUT_SAMPLES)
-    if n == 1:
-        out = await llm.chat_json(
-            system,
-            user,
-            reasoning_effort=C.INPUT_REASONING_EFFORT,
-            max_tokens=C.MAX_TOKENS,
-            tag="guard.input",
-        )
-        v = _input_vote_from_out(out, messages)
-        return {"decision": v[0], "category": v[1]} if v else {"decision": "allow", "category": "normal"}
+    checks = focus.start_checks(messages, C.FOCUS_NAMES, C.FOCUS_VOTE_NAMES, for_guard=True)
 
     async def _one_vote() -> tuple[str, str] | None:
         out = await llm.chat_json(
@@ -78,36 +68,56 @@ async def check_input(messages: list[dict], kb: KnowledgeBase | None = None) -> 
         )
         return _input_vote_from_out(out, messages)
 
-    need = n // 2 + 1
-    tasks = [asyncio.create_task(_one_vote()) for _ in range(n)]
-    votes: list[tuple[str, str]] = []
-    pair_counts: Counter[tuple[str, str]] = Counter()
+    n = max(1, C.INPUT_SAMPLES)
+    top_dec = "allow"
+    category = "normal"
     try:
-        for fut in asyncio.as_completed(tasks):
+        if n == 1:
+            v = await _one_vote()
+            if v:
+                top_dec, category = v
+        else:
+            need = n // 2 + 1
+            tasks = [asyncio.create_task(_one_vote()) for _ in range(n)]
+            votes: list[tuple[str, str]] = []
+            pair_counts: Counter[tuple[str, str]] = Counter()
+            matched: tuple[str, str] | None = None
             try:
-                v = await fut
-            except Exception as e:
-                log_error("guard.input_sample", e)
-                continue
-            if v is None:
-                continue
-            votes.append(v)
-            pair_counts[v] += 1
-            if pair_counts[v] >= need:
-                return {"decision": v[0], "category": v[1]}
-    finally:
-        for t in tasks:
-            if not t.done():
-                t.cancel()
-            elif not t.cancelled():
-                t.exception()
-    if not votes:
-        return {"decision": "allow", "category": "normal"}
-    dec_counts = Counter(d for d, _ in votes)
-    top_dec = dec_counts.most_common(1)[0][0]
-    cat_counts = Counter(c for d, c in votes if d == top_dec)
-    top_cat = cat_counts.most_common(1)[0][0]
-    return {"decision": top_dec, "category": top_cat}
+                for fut in asyncio.as_completed(tasks):
+                    try:
+                        v = await fut
+                    except Exception as e:
+                        log_error("guard.input_sample", e)
+                        continue
+                    if v is None:
+                        continue
+                    votes.append(v)
+                    pair_counts[v] += 1
+                    if pair_counts[v] >= need:
+                        matched = v
+                        break
+            finally:
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                    elif not t.cancelled():
+                        t.exception()
+            if matched is not None:
+                top_dec, category = matched
+            elif votes:
+                dec_counts = Counter(d for d, _ in votes)
+                top_dec = dec_counts.most_common(1)[0][0]
+                cat_counts = Counter(c for d, c in votes if d == top_dec)
+                category = cat_counts.most_common(1)[0][0]
+    except BaseException:
+        for t in checks.values():
+            t.cancel()
+        raise
+
+    category = await focus.apply_checks(category, checks, for_guard=True)
+    if category == "normal" and config.SELF_INTRO_RULE and focus.has_self_intro(messages):
+        category = "pii_disclosure"
+    return {"decision": policy.decide(category, top_dec), "category": category}
 
 
 # '정답만' 표지: 풀이 없이 답만 달라는 표현. 공개 세트 answer_seeking 12건 전부에 있고 다른 388건에는 없다.

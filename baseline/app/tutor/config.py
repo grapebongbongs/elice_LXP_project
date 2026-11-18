@@ -29,7 +29,8 @@ FOCUS_NAMES = os.getenv("TUTOR_FOCUS_NAMES", "override,pii,scam,submit,offtask")
 # 가드 문항에서는 차이가 없어(지시 우회 30/39 → 31/39, 사기 24/30 → 23/30, 과제 대행 32/36 → 31/36) 가드는 한 번만 부른다.
 # 실제 제출(11/16 16:40, 커밋 89fd6df, 가드 변경 두 가지와 함께): 튜터 88.17. 같은 날 305fa8c 의 튜터는 89.25 / 88.33 / 88.42 로 차이가 없다.
 # 다른 변경을 제출로 견줄 때 기준(305fa8c)과 같게 두려고 꺼 둔다(비워 두면 모두 한 번만 부른다).
-FOCUS_VOTE_NAMES = os.getenv("TUTOR_FOCUS_VOTE_NAMES", "override,submit")
+FOCUS_VOTE_NAMES = os.getenv("TUTOR_FOCUS_VOTE_NAMES", "override,pii,scam,submit")
+CLASSIFY_SAMPLES = int(os.getenv("TUTOR_CLASSIFY_SAMPLES", "3"))
 CLASSIFY_REASONING_EFFORT = os.getenv("TUTOR_CLASSIFY_REASONING_EFFORT", "low")
 CLASSIFY_MAX_TOKENS = int(os.getenv("TUTOR_CLASSIFY_MAX_TOKENS", "1500"))
 
