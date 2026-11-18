@@ -126,7 +126,7 @@ APPEND_CONTEXT_MAX_CHARS = int(os.getenv("TUTOR_APPEND_CONTEXT_MAX_CHARS", "180"
 
 # answer 생성 1차 시도에 보여 줄 검색 상위 섹션 수 (0 이면 처음부터 TOP_K 개를 모두 보여 준다).
 # 실측(전체 2회, SPECULATIVE 와 함께): 튜터 84.44 → 86.81, 인용 F1 0.83 → 0.88, 근거 충실 0.88 → 0.90, p95 지연 11.4초 → 10.3초.
-FIRST_PASS_K = int(os.getenv("TUTOR_FIRST_PASS_K", "2"))
+FIRST_PASS_K = int(os.getenv("TUTOR_FIRST_PASS_K", "1"))
 
 # 이름 붙은 규칙·기준·등급을 "뭐야"라고 묻는데 그 이름이 검색 1위 섹션에 없으면 생성 결과와 상관없이 abstain 으로 답한다 (0 이면 끔).
 # app/common/focus.py 의 NAMED_RULE. 모델은 이런 질문에 같은 실습의 비슷한 문장을 근거로 대고 답하는 일이 반복됐다.
