@@ -157,7 +157,7 @@ FIRST_PASS_ONLY = os.getenv("TUTOR_FIRST_PASS_ONLY", "1") == "1"
 # 문항 점수 합 +1.12 (tune +0.64, holdout +0.48), 규칙 기반 점수(action·인용) 합 +1.52.
 #   FIRST_PASS_RETRY_BUDGET : 요청을 받은 지 이 시간(초)이 넘었으면 재시도를 시작하지 않는다 (1차 생성이 답을 못 낸 요청의 처리 시간 p50 5.4초, p90 7.9초)
 #   FIRST_PASS_RETRY_TIMEOUT: 재시도 호출 한 번을 기다리는 최대 시간(초). 넘기면 원래대로 abstain
-FIRST_PASS_RETRY = int(os.getenv("TUTOR_FIRST_PASS_RETRY", "0"))
+FIRST_PASS_RETRY = int(os.getenv("TUTOR_FIRST_PASS_RETRY", "1"))
 FIRST_PASS_RETRY_BUDGET = float(os.getenv("TUTOR_FIRST_PASS_RETRY_BUDGET", "8"))
 FIRST_PASS_RETRY_TIMEOUT = float(os.getenv("TUTOR_FIRST_PASS_RETRY_TIMEOUT", "9"))
 
