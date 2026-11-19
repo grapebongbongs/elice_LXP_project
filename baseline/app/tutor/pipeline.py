@@ -192,6 +192,8 @@ async def classify(messages: list[dict], hits=None, detail: dict | None = None) 
             chosen = ("normal", None)
     category, harm_type = chosen
     detail = {} if detail is None else detail
+    if not C.CLASSIFY_USE_MATERIAL and category == "out_of_material":
+        category = "normal"
     category = await focus.apply_checks(category, checks, detail)
     detail.update(main_harm=harm_type)
     if (

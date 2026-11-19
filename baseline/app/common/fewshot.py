@@ -36,6 +36,8 @@ class FewShotIndex:
                     category = d["labels"]["category"]
                 except Exception:
                     continue
+                if category == "out_of_material":
+                    continue
                 key = compact(text)
                 if not key or key in seen:
                     continue
