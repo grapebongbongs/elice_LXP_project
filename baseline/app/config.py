@@ -33,7 +33,7 @@ SERVER_TOKEN = os.getenv("SERVER_TOKEN") or os.getenv("TEAM_TOKEN", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano")
-LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "64"))
+LLM_MAX_CONCURRENCY = int(os.getenv("LLM_MAX_CONCURRENCY", "96"))
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "24"))
 # 1 이면 응답에 "_debug"(분류 범주·검색 순위·근거 문장 위치)를 덧붙인다. 공개 세트 실험 서버(loop/exp_run.py --env EXP_DEBUG=1)에서만 켠다.
 # 제출용 서버에서는 켜지 않는다(채점기는 규격에 없는 필드를 무시하지만, 채점 요청의 처리 내용을 밖으로 내보내지 않기 위해).

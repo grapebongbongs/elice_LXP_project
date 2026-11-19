@@ -186,13 +186,33 @@ def _span_size(spans: list[str]) -> int:
     return len(_SPAN_NOISE.sub("", "".join(spans)))
 
 
+def _span_char_f1(a: list[str], b: list[str]) -> float:
+    ca = Counter(_SPAN_NOISE.sub("", "".join(a)))
+    cb = Counter(_SPAN_NOISE.sub("", "".join(b)))
+    if not ca and not cb:
+        return 1.0
+    overlap = sum((ca & cb).values())
+    if not overlap:
+        return 0.0
+    p = overlap / sum(ca.values())
+    r = overlap / sum(cb.values())
+    return 2 * p * r / (p + r)
+
+
 def combine_votes(votes: list[dict]) -> dict:
     bad = [v for v in votes if not v["grounded"]]
     safe = sum(bool(v["safe"]) for v in votes) * 2 >= len(votes)
     if not bad or len(bad) < len(votes) - len(bad):
         return {"grounded": True, "unsupported": [], "safe": safe}
     with_span = [v["unsupported"] for v in bad if v["unsupported"]]
-    spans = min(with_span, key=_span_size) if with_span else []
+    if len(with_span) >= 3:
+        def _mbr_key(item: tuple[int, list[str]]) -> tuple[float, int]:
+            idx, s = item
+            avg_f1 = sum(_span_char_f1(s, o) for j, o in enumerate(with_span) if j != idx) / (len(with_span) - 1)
+            return (round(avg_f1, 12), -_span_size(s))
+        _, spans = max(enumerate(with_span), key=_mbr_key)
+    else:
+        spans = min(with_span, key=_span_size) if with_span else []
     return {"grounded": False, "unsupported": list(spans), "safe": safe}
 
 
