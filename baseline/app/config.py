@@ -23,7 +23,7 @@ PUBLIC_DIR = os.getenv("PUBLIC_DIR") or _first_existing(
     str(Path(COMPETITION_DIR) / "public"), str(_HERE.parent / "public")
 )
 # 분류 프롬프트에 넣을 공개 세트 유사 예시 수 (0 이면 끔). app/common/fewshot.py
-FEWSHOT_K = int(os.getenv("FEWSHOT_K", "0"))
+FEWSHOT_K = int(os.getenv("FEWSHOT_K", "5"))
 
 # 서버 인증 토큰 (submission.json 의 token 과 같아야 함, LLM 키와 다른 값)
 # 런박스 .env 에 TEAM_TOKEN 이라는 이름으로 적혀 있는 경우도 받는다
