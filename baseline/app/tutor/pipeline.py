@@ -122,6 +122,62 @@ async def retrieve(messages: list[dict], kb: KnowledgeBase):
 
 
 # ---------------------------------------------------------------- 1단계: 분류
+def _classification_label(out) -> tuple[str, str | None]:
+    """LLM 출력을 유효한 분류 표로 정규화한다."""
+    category = out.get("category") if isinstance(out, dict) else "normal"
+    if category not in GUARD_CATEGORIES:
+        category = "normal"
+    harm_type = out.get("harm_type") if isinstance(out, dict) else None
+    if harm_type not in ("hate", "actionable"):
+        harm_type = None
+    # harmful_content 가 아니면 harm_type 은 응대에 쓰이지 않으므로 투표 표에서도 제외한다.
+    if category != "harmful_content":
+        harm_type = None
+    return category, harm_type
+
+
+async def _classify_once(system: str, user: str):
+    return await llm.chat_json(
+        system,
+        user,
+        reasoning_effort=C.CLASSIFY_REASONING_EFFORT,
+        max_tokens=C.CLASSIFY_MAX_TOKENS,
+    )
+
+
+async def _classify_main(system: str, user: str) -> tuple[tuple[str, str | None], list[tuple[str, str | None]]]:
+    """두 판정이 같으면 확정하고, 다르면 세 번째 판정으로 과반을 정한다."""
+    if not C.CLASSIFY_ADAPTIVE_VOTE:
+        label = _classification_label(await _classify_once(system, user))
+        return label, [label]
+
+    raw = await asyncio.gather(_classify_once(system, user), _classify_once(system, user), return_exceptions=True)
+    labels: list[tuple[str, str | None]] = []
+    errors: list[BaseException] = []
+    for out in raw:
+        if isinstance(out, BaseException):
+            errors.append(out)
+            log_error("tutor.classify_vote", out)
+        else:
+            labels.append(_classification_label(out))
+
+    # 둘이 다르거나 하나가 실패했으면 세 번째 독립 표를 받는다.
+    if len(labels) < 2 or labels[0] != labels[1]:
+        try:
+            labels.append(_classification_label(await _classify_once(system, user)))
+        except BaseException as e:
+            errors.append(e)
+            log_error("tutor.classify_vote", e)
+
+    if not labels:
+        raise errors[0]
+    counts = Counter(labels)
+    winner, count = counts.most_common(1)[0]
+    if count < 2:
+        winner = labels[0]  # 세 표가 모두 다르면 기존 단일 판정과 같은 첫 결과를 쓴다.
+    return winner, labels
+
+
 async def classify(messages: list[dict], hits=None, detail: dict | None = None) -> tuple[str, str | None]:
     if config.LOW_SIGNAL_RULE and focus.is_low_signal(messages):
         if detail is not None:
@@ -139,22 +195,13 @@ async def classify(messages: list[dict], hits=None, detail: dict | None = None) 
     user = fewshot.examples_block(messages) + user
     checks = focus.start_checks(messages, C.FOCUS_NAMES, C.FOCUS_VOTE_NAMES)  # 단서가 있으면 경계 판정을 주 분류와 동시에 시작
     try:
-        out = await llm.chat_json(
-            system,
-            user,
-            reasoning_effort=C.CLASSIFY_REASONING_EFFORT,
-            max_tokens=C.CLASSIFY_MAX_TOKENS,
-        )
+        (category, harm_type), votes = await _classify_main(system, user)
     except BaseException:
         for t in checks.values():
             t.cancel()
         raise
-    # 분류 실패 시 다수 범주(normal)로 진행 — 생성 프롬프트가 2차 방어
-    category = out.get("category") if out else "normal"
-    if category not in GUARD_CATEGORIES:
-        category = "normal"
-    harm_type = out.get("harm_type") if out and out.get("harm_type") in ("hate", "actionable") else None
     detail = {} if detail is None else detail
+    detail.update(main_votes=[{"category": c, "harm_type": h} for c, h in votes])
     category = await focus.apply_checks(category, checks, detail)
     detail.update(main_harm=harm_type)
     if (

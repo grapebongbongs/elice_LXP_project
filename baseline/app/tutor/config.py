@@ -32,6 +32,9 @@ FOCUS_NAMES = os.getenv("TUTOR_FOCUS_NAMES", "override,pii,scam,submit,offtask")
 FOCUS_VOTE_NAMES = os.getenv("TUTOR_FOCUS_VOTE_NAMES", "")
 CLASSIFY_REASONING_EFFORT = os.getenv("TUTOR_CLASSIFY_REASONING_EFFORT", "low")
 CLASSIFY_MAX_TOKENS = int(os.getenv("TUTOR_CLASSIFY_MAX_TOKENS", "1500"))
+# 주 분류를 저추론으로 두 번 동시에 실행하고, 둘의 판정이 다를 때만 한 번 더 실행해 과반을 택한다.
+# 0 이면 기존처럼 한 번만 분류한다. 세 결과가 모두 다르면 첫 판정(기존 동작)을 유지한다.
+CLASSIFY_ADAPTIVE_VOTE = os.getenv("TUTOR_CLASSIFY_ADAPTIVE_VOTE", "1") == "1"
 
 # 검색·분류·생성에 넘기기 전에 마지막 발화에서 압박·권한 말머리를 뗀다 (app/common/focus.py 의 WRAPPER). 가드에서는 채택했지만 튜터에서는 꺼 둔다.
 # 말머리가 있는 튜터 31문항에서 켠 것과 끈 것을 3회씩 비교(loop/wrapper_eval.py): action 오류 tune 9/72 → 6/72, holdout 2/21 → 3/21.
