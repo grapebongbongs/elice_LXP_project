@@ -1,191 +1,312 @@
-# 제출용 Baseline (Tutor / Guard 분리 구조)
+# 제출 서버 기술 가이드
 
-`POST /tutor`, `POST /guard` 를 제공하는 FastAPI 서버. **튜터와 가드는 서로 다른 폴더에서 독립적으로 개발**하고,
-서버·형식·인증·로깅은 공통 레이어가 보장한다.
+이 디렉터리는 `POST /tutor`와 `POST /guard`를 제공하는 최종 FastAPI 서버입니다. 현재 구현 기준은 커밋 `067d9cb`이며, 팀 공유 브랜치는 `sangin-93.38`입니다.
 
-## 폴더 구조와 담당
+## 처리 구조
+
+```text
+요청
+ ├─ Bearer 토큰 확인
+ ├─ 요청 정규화 및 크기 확인
+ ├─ Tutor 또는 Guard 파이프라인
+ ├─ 응답 스키마 강제 및 fallback
+ └─ HTTP 200 JSON 응답
+```
+
+- 서버 전체 처리 제한은 기본 25초입니다.
+- LLM 호출은 최대 64개까지 동시에 처리합니다.
+- 느린 호출은 설정된 시점에 보조 호출을 보내 먼저 완료된 결과를 사용합니다.
+- 오류가 발생해도 채점 규격에 맞는 fallback JSON을 반환합니다.
+- 로그에는 경로, 본문 길이, 상태, 처리 시간, 오류 종류만 남기며 요청·응답 본문은 남기지 않습니다.
+
+## 디렉터리 구조
 
 ```text
 baseline/
 ├── app/
-│   ├── main.py              [공통] 서버·인증·리다이렉트 방지·타임아웃·fallback·로깅
-│   ├── config.py            [공통] 경로·토큰·LLM 설정 (환경변수)
+│   ├── main.py              # FastAPI 엔드포인트, 인증, 제한 시간, fallback
+│   ├── config.py            # 공통 경로·LLM·서버 설정
 │   ├── common/
-│   │   ├── llm.py           [공통] LLM 호출 (JSON 강제, 동시성 제한)
-│   │   ├── kb.py            [공통] KB 로드 + BM25 검색 (서버 시작 시 색인)
-│   │   ├── schema.py        [공통] 요청 정규화 · 응답 규격 강제 · unsupported 원문 위치 복원
-│   │   └── logging_util.py  [공통] 시간·길이·상태·오류명만 로깅
-│   ├── tutor/               ★ 튜터 담당만 수정
-│   │   ├── pipeline.py      handle(req, kb, retriever=None) → {answer, action, citations}
-│   │   ├── retrieval.py     튜터 전용 임베딩 + BM25 RRF 검색
-│   │   ├── prompts.py       시스템 프롬프트·action 기준
-│   │   └── config.py        TOP_K, reasoning effort 등
-│   └── guard/               ★ 가드 담당만 수정
-│       ├── pipeline.py      check_input (입력 담당) / check_output (답변 담당) 병렬 실행
-│       ├── prompts.py       입력 범주 정의 / 답변 판정 프롬프트
-│       ├── policy.py        범주 → allow/block 정책표 (공개 라벨로 확정)
-│       └── config.py
+│   │   ├── kb.py            # KB 로드와 BM25 검색
+│   │   ├── llm.py           # JSON LLM 호출, 동시성·보조 호출 제어
+│   │   ├── schema.py        # 요청 정규화와 최종 응답 규격 보정
+│   │   ├── focus.py         # 경계 사례 판정과 규칙
+│   │   ├── normalize.py     # 텍스트 정규화
+│   │   ├── fewshot.py       # 선택적 공개 예시 검색
+│   │   ├── embed.py         # Guard 출력 정렬 실험용 임베딩
+│   │   └── logging_util.py  # 본문을 제외한 운영 로그
+│   ├── tutor/
+│   │   ├── pipeline.py      # 검색, 분류, 답변, 인용 처리
+│   │   ├── prompts.py       # Tutor 프롬프트
+│   │   └── config.py        # TUTOR_* 설정
+│   └── guard/
+│       ├── pipeline.py      # 입력·후보 답변 판정
+│       ├── prompts.py       # Guard 프롬프트
+│       ├── policy.py        # 범주별 allow/block 정책
+│       └── config.py        # GUARD_* 설정
 ├── scripts/
-│   ├── eval_public.py         --part tutor|guard  공개 세트 빠른 평가
-│   ├── analyze_guard_labels.py  가드 범주×결정 교차표 → policy.py 근거
-│   └── load_test.py           64 동시 요청·형식·인증·리다이렉트 점검
-├── run.sh  requirements.txt  .env.example
+│   ├── load_test.py         # 인증·형식·동시성 검사
+│   ├── eval_public.py       # 공개 세트 파트별 평가
+│   └── analyze_guard_labels.py
+├── requirements.txt
+├── .env.example
+└── run.sh
 ```
 
-**규칙**
-- 파트 코드는 `async def handle(req: dict, kb, ...) -> dict` 인터페이스만 지키면 내부는 자유. 형식이 조금 틀려도 `schema.py`가 규격대로 고쳐서 내보내므로 **형식 오류로 0점 나는 일은 없다.**
-- 가드 2명은 `check_input` / `check_output` 함수를 나눠 맡으면 충돌이 없다 (프롬프트도 `INPUT_*` / `OUTPUT_*` 로 분리).
-- `app/common/`, `app/main.py` 수정은 팀에 공유 후 진행 (양쪽 점수에 영향). 검색 개선(임베딩 등)은 `kb.py`의 `search()` 인터페이스를 유지한 채 바꾼다.
-- 파트별 튜닝 값은 각자 `config.py` 또는 환경변수(`TUTOR_*`, `GUARD_*`)로 바꾼다.
+`embed.py`는 현재 기본 경로에서는 사용하지 않습니다. `GUARD_OUTPUT_ALIGN`의 기본값이 `0`이므로 최종 공유본은 BM25 검색만 사용합니다.
 
-## 런박스 실행
+## API
 
-```bash
-cd /home/elicer/competition
-# baseline 폴더를 여기로 복사 (→ /home/elicer/competition/baseline, kb/ 는 ../kb 로 자동 인식)
-cd baseline
-pip install -r requirements.txt
-cp .env.example ../.env      # 키·SERVER_TOKEN 입력 (이미 ../.env 가 있으면 SERVER_TOKEN 만 추가)
-bash run.sh                  # 0.0.0.0:8000, PORT=8001 bash run.sh 로 변경 가능 (8080 금지)
+모든 POST 요청에 다음 헤더가 필요합니다.
+
+```http
+Authorization: Bearer <SERVER_TOKEN>
+Content-Type: application/json
 ```
 
-시작 로그에 `[kb] loaded N sections` 가 0보다 커야 한다 (경로가 다르면 `KB_DIR=/path/to/kb`).
+### `GET /health`
 
-## 검증 (제출 전)
-
-```bash
-# 1) 형식·동시성·인증 (크레딧 0원: LLM_MOCK=1 bash run.sh 로 띄운 뒤)
-python scripts/load_test.py --token "$SERVER_TOKEN" --n 128
-# 2) 외부 주소로도 동일 확인
-python scripts/load_test.py --url https://<런박스>.tunnel.elice.io/proxy/8000 --token "$SERVER_TOKEN" --n 64
-# 3) 파트별 공개 세트 평가 (실제 LLM)
-python scripts/eval_public.py --part tutor --token "$SERVER_TOKEN"
-python scripts/eval_public.py --part guard --token "$SERVER_TOKEN"
-# 4) 공식 로컬 채점기 harness/, grader/ 로 최종 확인
+```json
+{"ok": true, "sections": 48}
 ```
 
-`eval_public.py` 는 공개 jsonl 의 필드 이름을 자동 탐색한다. 첫 실행 때 출력되는 `first item keys` 를 보고 라벨을 못 찾으면 `find()` 경로를 고친다.
+`sections`가 0이면 KB 경로를 확인해야 합니다.
 
-## 제출
+### `POST /tutor`
 
-`/home/elicer/competition/submission.json` (위치·이름 변경 금지):
+요청:
 
 ```json
 {
-  "tutor_url": "https://<런박스 주소>.tunnel.elice.io/proxy/8000/tutor",
-  "guard_url": "https://<런박스 주소>.tunnel.elice.io/proxy/8000/guard",
-  "token": "<.env 의 SERVER_TOKEN 과 동일>",
-  "commit": "<git rev-parse HEAD>"
+  "spec_version": "1.0",
+  "session_id": "s_example",
+  "messages": [
+    {"role": "user", "content": "체크카드의 하루 사용 한도는 얼마야?"}
+  ]
 }
 ```
 
-채점이 끝날 때까지 서버와 런박스 탭을 유지한다.
+응답:
 
-## 지금 baseline 이 하는 것 / 할 일
-
-| 파트 | 현재 | 우선 개선 (TODO) |
-|---|---|---|
-| 튜터 | BM25+임베딩 RRF top5 → LLM으로 action·answer·citations 생성, 인용은 KB 실존 ID만 | 공개 라벨로 action 기준 보정, 인용 개수 줄이기(정밀도), 퀵버튼 첫 발화 처리 |
-| 가드-입력 | LLM 범주 분류 → `policy.py` 정책표로 allow/block | **`analyze_guard_labels.py` 로 정책표 확정 (현재 미검증 초안)**, 범주 정의를 라벨 기반으로 재작성 |
-| 가드-답변 | 근거 검색 + LLM 판정, unsupported 는 후보 답변 원문으로 위치 복원 | grounded 기준 보정, 구간 단위(문장/구) 맞추기 |
-| 공통 | 오류·25초 초과 시 규격 fallback, 본문 미로깅 | 임베딩 하이브리드 검색, 지연 시간 측정 |
-
-LLM 이 없을 때의 fallback: 튜터 `clarify`, 가드 `allow/normal` + `grounded/safe=true`.
-
-## Elice 실험 매크로
-
-`scripts/run_experiment.sh`는 **깨끗하게 커밋된 후보 브랜치**에서만 실행합니다. 실제 LLM으로 64 동시성 검사를 하고 공개 세트 평가를 10회 실행합니다. 후보 중위값이 기존 champion보다 3점 이내이면 champion도 같은 시점에 10회 재평가합니다.
-
-```bash
-git switch codex/experiment/<id>
-bash scripts/run_experiment.sh \
-  --id <YYYYMMDD-sequence> \
-  --scope tutor \
-  --hypothesis "가설을 한 문장으로 적습니다"
+```json
+{
+  "answer": "자료를 바탕으로 한 답변",
+  "action": "answer",
+  "citations": ["FIN-02-01"]
+}
 ```
 
-- `experiment-reports/champion.json`이 없으면 최초 기준을 만드는 `bootstrap_needs_review` 결과만 기록합니다.
-- 64 동시성, 형식, 인증, 리다이렉트, 각 평가의 형식·판정 오류가 한 번이라도 발생하면 즉시 실패합니다.
-- 총점 중위값 승격 폭은 `Δ=3`입니다. total은 올랐지만 guard가 떨어지거나, tutor가 오르지 않은 상태에서 guard만 4.2점 이상 오르면 `review_required`로 멈춥니다.
-- 요청·응답 본문은 저장하지 않습니다. `/tmp`에는 숫자 집계와 서버 메타 로그만 잠시 두고 종료 시 삭제합니다.
-- `scripts/publish_experiment_result.sh`는 저장소에 완료된 `exp-result-<id>/report.json`이 하나뿐이면 인자 없이 그 수치 결과를 현재 후보 브랜치에 커밋·push합니다. 완료된 결과가 여러 개면 `--result-dir exp-result-<id>`로 대상을 지정합니다. 같은 폴더의 `logs/`는 런박스에 남지만 Git에는 올라가지 않습니다. `main`/`champion`에는 직접 push하지 않습니다.
+`action`은 `answer`, `scaffold`, `clarify`, `abstain`, `redirect`, `refuse`, `escalate` 중 하나입니다. `answer`는 4,000자 이하이며, `citations`에는 실제 KB 섹션 ID만 남습니다.
 
-상세 운영 지침은 로컬 전용 `.docs/experiment-loop.md`를 확인하세요.
+### `POST /guard`
 
-실험 매크로는 시작 시 `fastapi`, `uvicorn`, `openai`, `httpx`를 확인합니다. 하나라도
-없으면 `requirements.txt`에 선언된 의존성만 설치하고, 이미 설치되어 있으면 설치를
-건너뜁니다.
+요청:
 
-후보가 커밋된 뒤 `scripts/evaluate_current_candidate.sh`를 실행하면 KST 시각+커밋 해시의
-실험 ID, 최신 커밋 제목의 가설, 변경 경로 기반 범위를 자동으로 생성해 실험 매크로를 호출합니다.
-
-### 후보 브랜치·커밋·push 만들기
-
-작업 트리의 변경을 새 후보 브랜치 하나에 묶어 원격으로 올릴 때는 아래 스크립트를 쓴다.
-현재의 **모든 비무시 변경**은 기본으로 한 커밋에 포함된다. 기존 브랜치,
-`main`, `champion`을 덮어쓰거나 force-push하지 않는다.
-
-```bash
-# .git_info를 현재 후보 정보로 갱신한 뒤, 인자 없이 실행할 수 있다.
-bash scripts/create_candidate_branch.sh
-
-# 최초 실행: feature·번호를 기록한다.
-bash scripts/create_candidate_branch.sh \
-  --feature tutor-hybrid-retrieval \
-  --number 01 \
-  --update "add 1536d BM25 and embedding RRF retrieval"
-
-# 다음 변경: .git_info를 읽어 같은 feature의 번호를 02로 자동 증가시킨다.
-bash scripts/create_candidate_branch.sh \
-  --update "tune dense retrieval candidate count"
+```json
+{
+  "spec_version": "1.0",
+  "session_id": "s_example",
+  "messages": [
+    {"role": "user", "content": "질문 내용"}
+  ],
+  "candidate_answer": "검사할 튜터 답변"
+}
 ```
 
-브랜치는 `TraderPark/<변경특징>-<변경번호>` 형식으로 생성되고 upstream을 설정한다. 예:
-`TraderPark/tutor-hybrid-retrieval-01`. `.git_info`에는 마지막 `feature`, `number`, `message`를
-로컬로만 저장한다. 실행 전 변경 목록·커밋 메시지를 보여 주며 `y` 또는 `yes`를 입력해야만
-브랜치 생성·커밋·push를 수행한다. 모든 비무시 변경은 기본으로 포함된다. `.env`, `.docs/`,
-`.venv/`, `.git_info`, `exp-result-*/logs/`는 `.gitignore`에 의해 포함되지 않는다.
+응답:
 
-### 하이브리드 검색 파라미터 순차 실험
-
-`scripts/sweep_retrieval_params.sh`는 `HYBRID_DENSE_K`와 `HYBRID_RRF_K` 조합을 같은 base
-커밋에서 순차 평가한다. 각 후보는 새 브랜치에 두 config 값만 커밋·push한 뒤 64 동시성 검사와
-공개 세트 10회 평가를 모두 마쳐야 다음 후보로 진행한다. 병렬 서버·병렬 채점은 사용하지 않는다.
-
-```bash
-bash scripts/sweep_retrieval_params.sh \
-  --candidates 5:60,5:20,3:60 \
-  --start-number 02
+```json
+{
+  "input": {
+    "decision": "allow",
+    "category": "normal"
+  },
+  "output": {
+    "grounded": true,
+    "unsupported": [],
+    "safe": true,
+    "category": "normal"
+  }
+}
 ```
 
-각 값은 `dense_k:RRF_k` 형식이다. 위 배열은 첫 번째와 두 번째에서 RRF만, 첫 번째와 세 번째에서
-dense 후보 수만 달라 원인을 분리해 비교할 수 있다. `--start-number`를 생략하면 `.git_info`의
-다음 번호부터 시작하며, 실행 전 한 번 `y`/`yes` 확인을 받는다.
+`candidate_answer`가 없는 요청은 `input`만 반환합니다. `unsupported`의 각 항목은 반드시 후보 답변에 실제로 존재하는 부분 문자열로 보정됩니다.
 
-### 실험 진행 대시보드
+끝 슬래시 유무와 런박스 프록시 경로 모두 리다이렉트 없이 처리합니다.
 
-실험을 실행하기 전 별도 터미널에서 다음을 실행하면 64 동시성 검사 상태와 10회
-채점 표(회차별 정답·부분 점수·오답·형식 오류·총점·tutor·guard)를 실시간으로 볼 수 있다.
+## Tutor 파이프라인
 
-```bash
-python3 scripts/experiment_dashboard.py
+1. 대화 이력과 마지막 발화를 정규화합니다.
+2. 저신호 입력과 개인정보·유해 요청·과제 대행 등 명확한 경계 사례를 확인합니다.
+3. 이전 Tutor 답변을 포함한 검색 질의로 KB의 BM25 상위 5개 섹션을 찾습니다.
+4. 저추론 분류를 2회 동시에 실행합니다. 두 결과가 다르거나 실패하면 세 번째 분류를 실행해 다수결합니다.
+5. 분류와 1차 답변 생성을 가능한 범위에서 병렬 실행합니다.
+6. 검색 1위 섹션에서 추출형 답변을 만들고 근거 문장이 실제 자료에 있는지 확인합니다.
+7. 근거 확인이 실패하면 제한 시간 안에서 재시도하거나, 검색 문장을 직접 추출하거나, 자료 밖 질문으로 abstain합니다.
+8. 인용을 최대 1개로 정리하고 최종 응답 스키마를 강제합니다.
+
+주요 기본값:
+
+| 환경변수 | 기본값 | 의미 |
+|---|---:|---|
+| `TUTOR_TOP_K` | `5` | 검색할 KB 섹션 수 |
+| `TUTOR_REASONING_EFFORT` | `low` | 답변 생성 추론 수준 |
+| `TUTOR_MAX_TOKENS` | `2000` | Tutor LLM 최대 출력 토큰 |
+| `TUTOR_CLASSIFY_ADAPTIVE_VOTE` | `1` | 분류 적응형 다수결 사용 |
+| `TUTOR_SPECULATIVE` | `1` | 분류와 답변 생성을 병렬 시작 |
+| `TUTOR_EXTRACTIVE` | `1` | 근거 문장 선택형 답변 사용 |
+| `TUTOR_MAX_CITATIONS` | `1` | 인용 개수 상한 |
+| `TUTOR_APPEND_QUOTE` | `1` | 확인된 근거 문장을 답변에 보강 |
+| `TUTOR_APPEND_CONTEXT` | `0` | 추가 문맥 문장 덧붙이기 비활성 |
+| `TUTOR_STRIP_WRAPPERS` | `0` | 발화 말머리 제거 비활성 |
+
+## Guard 파이프라인
+
+1. 입력 판정과 후보 답변 판정을 동시에 시작합니다.
+2. 입력 판정은 검색 자료 상위 3개를 함께 보고 `decision`과 `category`를 정합니다.
+3. 기본 `medium` 판정이 8초 안에 끝나지 않으면 같은 프롬프트를 `low`로 보내 먼저 끝난 결과를 사용합니다.
+4. 차단 입력의 후보 답변은 `grounded=true`, `unsupported=[]`로 처리합니다.
+5. 허용 입력의 후보 답변은 3회 독립 판정합니다.
+6. `grounded`는 다수결로 정하고, 근거 없음 표 중 가장 짧고 유효한 구간을 선택합니다.
+7. `safe`는 입력 허용 여부에서 유도하고 최종 스키마를 강제합니다.
+
+주요 기본값:
+
+| 환경변수 | 기본값 | 의미 |
+|---|---:|---|
+| `GUARD_TOP_K` | `4` | 출력 판정용 검색 섹션 수 |
+| `GUARD_INPUT_TOP_K` | `3` | 입력 판정용 검색 섹션 수 |
+| `GUARD_INPUT_REASONING_EFFORT` | `medium` | 입력 분류 추론 수준 |
+| `GUARD_OUTPUT_REASONING_EFFORT` | `low` | 후보 답변 판정 추론 수준 |
+| `GUARD_MAX_TOKENS` | `2000` | Guard LLM 최대 출력 토큰 |
+| `GUARD_INPUT_BACKUP_AFTER` | `8` | low 보조 판정을 시작할 시간(초) |
+| `GUARD_OUTPUT_SAMPLES` | `3` | 후보 답변 독립 판정 횟수 |
+| `GUARD_SAFE_FROM_INPUT` | `1` | 입력 판정에서 safe 유도 |
+| `GUARD_STRIP_WRAPPERS` | `0` | 발화 말머리 제거 비활성 |
+| `GUARD_HARM_CLAUSE` | `0` | 추가 harmful 문구 비활성 |
+| `GUARD_OUTPUT_ALIGN` | `0` | 임베딩 기반 문장 정렬 비활성 |
+
+비활성 옵션은 공식 점수에서 채택되지 않은 실험값입니다. 특별한 비교 실험이 아니라면 최종 공유본의 기본값을 유지합니다.
+
+## 환경 설정
+
+저장소 루트의 `.env`를 사용합니다. `run.sh`는 `baseline/.env`보다 루트의 `.env`를 먼저 읽습니다.
+
+필수 값:
+
+```ini
+OPENAI_API_KEY=발급받은_API_키
+SERVER_TOKEN=제출용_서버_토큰
 ```
 
-`c`/`h`로 candidate/champion 표를 전환하고 `q`로 화면만 닫는다. 상태 파일에는 수치와
-단계만 기록하며 요청·응답 본문이나 비밀값은 표시·저장하지 않는다. 상세 내용은 로컬 전용
-`.docs/experiment-loop.md`를 참고한다. `Ctrl+C`도 traceback 없이 대시보드만 종료한다.
+런박스에서 미리 제공되는 값:
 
-### 튜터 하이브리드 검색 실험
+```ini
+OPENAI_BASE_URL=운영진_제공_URL
+OPENAI_MODEL=gpt-5-nano
+```
 
-튜터는 BM25와 `text-embedding-3-small`의 코사인 유사도 순위를 RRF로 합친다. 기본값은
-1,536차원이며 KB 임베딩은 서버 시작 때 한 번만 만든다. 요청별 질문 벡터는 메모리에서만
-사용하며 저장하거나 로그로 남기지 않는다. 가드는 이 실험의 영향을 받지 않도록 기존 BM25
-검색을 유지한다. 임베딩 API 초기화·호출이 실패하면 서버를 멈추지 않고 튜터도 기존 BM25
-경로로 자동 복귀한다.
+선택 값:
 
-512차원은 성능·안정성 비교를 위한 별도 후보에서만 다음처럼 설정한다. 같은 후보에서 다른
-검색 변경과 함께 비교하지 않는다.
+```ini
+LLM_MOCK=1
+PORT=8001
+KB_DIR=/다른/KB/경로
+LLM_MAX_CONCURRENCY=64
+REQUEST_DEADLINE=25
+```
+
+- `SERVER_TOKEN`은 `submission.json`의 `token`과 같아야 하며 API 키와는 다른 값을 씁니다.
+- `LLM_MOCK=1`은 형식·부하 검사 전용입니다. 실제 채점 서버에서는 사용하지 않습니다.
+- `.env`, 임베딩 캐시, 비밀값은 Git에 커밋하지 않습니다.
+
+## 실행
 
 ```bash
-export TUTOR_EMBEDDING_DIMENSIONS=512
+cd /home/elicer/competition/baseline
+python3 -m pip install -r requirements.txt
+bash run.sh
 ```
+
+기본 포트는 8000입니다. 8080은 런박스 VSCode가 사용하므로 선택하지 않습니다.
+
+## 제출 전 검사
+
+서버와 검사는 서로 다른 터미널에서 실행합니다.
+
+### 1. 상태 확인
+
+```bash
+curl -s http://127.0.0.1:8000/health
+```
+
+### 2. Mock 부하 테스트
+
+첫 번째 터미널:
+
+```bash
+cd /home/elicer/competition/baseline
+LLM_MOCK=1 PORT=8001 bash run.sh
+```
+
+두 번째 터미널:
+
+```bash
+cd /home/elicer/competition/baseline
+python3 scripts/load_test.py \
+  --url http://127.0.0.1:8001 \
+  --token "$SERVER_TOKEN" \
+  --n 64
+```
+
+### 3. 로컬 채점
+
+```bash
+cd /home/elicer/competition
+python3 harness/score_local.py \
+  --tutor-url http://127.0.0.1:8000/tutor \
+  --guard-url http://127.0.0.1:8000/guard \
+  --token "$SERVER_TOKEN" \
+  --public public \
+  --kb kb
+```
+
+로컬 채점과 공식 채점은 표본과 판정 모델이 달라 점수가 같지 않을 수 있습니다.
+
+## 문제 해결
+
+### `address already in use`
+
+8000번 포트에 기존 서버가 이미 실행 중입니다. 기존 서버를 그대로 쓰거나 해당 프로세스를 정상 종료한 뒤 다시 시작합니다. 같은 포트에 서버 두 개를 띄우지 않습니다.
+
+### `[kb] loaded 0 sections`
+
+저장소 구조가 `/home/elicer/competition/baseline`과 `/home/elicer/competition/kb`인지 확인합니다. 다른 위치라면 `KB_DIR`을 지정합니다.
+
+### HTTP 401
+
+요청의 Bearer 토큰, `.env`의 `SERVER_TOKEN`, `submission.json`의 `token`이 모두 같은지 확인합니다.
+
+### 제출은 되지만 채점 요청이 오지 않음
+
+- `submission.json`이 `/home/elicer/competition/submission.json`에 있는지 확인합니다.
+- 터널 주소에 `.tunnel.elice.io`가 중복되지 않았는지 확인합니다.
+- URL 끝에 `/tutor`, `/guard`가 정확히 있는지 확인합니다.
+- 외부 주소의 `/health` 또는 각 엔드포인트가 실제 서버로 연결되는지 확인합니다.
+
+### `active_grade_exists`
+
+이미 실행 중인 채점이 있다는 뜻입니다. 해시나 토큰을 바꿀 문제가 아니므로 기존 채점이 끝날 때까지 기다립니다.
+
+### 판정 오류가 갑자기 많이 발생함
+
+시간 초과·형식 오류·응답 없음이 0인데 판정 오류만 비정상적으로 많다면 채점기 측 일시 오류일 수 있습니다. 결과의 seed와 오류 수를 보관하고 운영진 안내에 따라 재제출합니다.
+
+## 운영 및 규정
+
+- 서버는 런박스 안에서 직접 검색·판정·응답해야 합니다.
+- 운영진이 제공한 LLM API와 제공된 KB만 사용합니다.
+- 요청 사이에 상태를 공유하거나 평가 요청을 저장·분석하지 않습니다.
+- 요청·응답 본문, API 키, 토큰을 로그에 남기지 않습니다.
+- 공개 정답이나 비공개 평가 패턴을 하드코딩하지 않습니다.
+- 최종 제출 전 `../SPEC.md`와 최신 운영진 공지를 다시 확인합니다.
