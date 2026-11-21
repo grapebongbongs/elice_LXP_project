@@ -1,9 +1,0 @@
-{
-  "requests": 64,
-  "elapsed_seconds": 16.5,
-  "p50_seconds": 6.06,
-  "p95_seconds": 11.87,
-  "max_seconds": 16.46,
-  "errors": 0,
-  "passed": true
-}
