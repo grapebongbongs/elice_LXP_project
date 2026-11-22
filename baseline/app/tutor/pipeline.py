@@ -255,8 +255,8 @@ def filter_citations(raw, action: str, hits: list[tuple[Section, float]]) -> lis
     for c in raw if isinstance(raw, list) else []:
         if isinstance(c, str) and c in retrieved and c not in cits:  # 검색된 섹션만 허용
             cits.append(c)
-    if not cits and action == "answer" and order:
-        cits = [order[0]]  # answer 라벨은 항상 근거 1개 → 모델이 빠뜨리면 검색 1위
+    if not cits and action in ("answer", "scaffold") and order:
+        cits = [order[0]]  # answer·scaffold 라벨은 근거 1개 → 모델이 빠뜨리면 검색 1위
     return cits[: C.MAX_CITATIONS]
 
 
@@ -851,7 +851,8 @@ async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict, ext
             "citations": filter_citations(None, "abstain", hits),
         }
     if out is None:
-        out = await generate(action, messages, hits)
+        gen_hits = hits[:1] if (action == "scaffold" and hits) else hits
+        out = await generate(action, messages, gen_hits)
     if not out or not isinstance(out.get("answer"), str) or not out["answer"].strip():
         return tutor_fallback()
 
@@ -875,6 +876,8 @@ async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict, ext
         else:
             raw_citations = [choose_citation(out.get("quote"), quote_sid, hits)]
     citations = filter_citations(raw_citations, final_action, hits)
+    if final_action == "scaffold" and hits:
+        citations = [hits[0][0].id]
     if final_action == "answer" and C.APPEND_QUOTE:
         answer = append_quote(answer, out.get("quote"), citations, hits)
     if final_action in ("answer", "scaffold") and C.APPEND_CONTEXT > 0:
