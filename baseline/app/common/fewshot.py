@@ -23,7 +23,7 @@ class FewShotIndex:
         self.examples: list[dict] = []
         self._vecs: list[dict[str, float]] = []
         self._df: Counter = Counter()
-        seen: set[str] = set()
+        by_key: dict[str, dict] = {}
         for name in ("guard", "tutor"):
             p = Path(public_dir) / f"{name}.jsonl"
             if not p.exists():
@@ -33,16 +33,29 @@ class FewShotIndex:
                     d = json.loads(line)
                     users = [m["content"] for m in d["messages"] if m.get("role") == "user"]
                     text = normalize_text(users[-1])
-                    category = d["labels"]["category"]
+                    labels = d["labels"]
+                    category = labels["category"]
                 except Exception:
                     continue
                 if category == "out_of_material":
                     continue
+                harm_type = None
+                if name == "tutor" and category == "harmful_content":
+                    act = labels.get("action")
+                    if act == "redirect":
+                        harm_type = "hate"
+                    elif act == "refuse":
+                        harm_type = "actionable"
                 key = compact(text)
-                if not key or key in seen:
+                if not key:
                     continue
-                seen.add(key)
-                self.examples.append({"key": key, "text": text, "category": category})
+                if key in by_key:
+                    if harm_type and not by_key[key].get("harm_type"):
+                        by_key[key]["harm_type"] = harm_type
+                    continue
+                ex = {"key": key, "text": text, "category": category, "harm_type": harm_type}
+                by_key[key] = ex
+                self.examples.append(ex)
         counts = [Counter(tokenize(e["text"])) for e in self.examples]
         for c in counts:
             self._df.update(c.keys())
@@ -54,12 +67,13 @@ class FewShotIndex:
         norm = math.sqrt(sum(x * x for x in v.values())) or 1.0
         return {t: x / norm for t, x in v.items()}
 
-    def search(self, text: str, k: int) -> list[dict]:
+    def search(self, text: str, k: int, extra_query: str = "") -> list[dict]:
         if k <= 0 or not self.examples:
             return []
-        text = normalize_text(text)
-        key = compact(text)
-        q = self._vec(Counter(tokenize(text)))
+        orig = normalize_text(text)
+        key = compact(orig)
+        q_text = f"{orig} {normalize_text(extra_query)}".strip() if extra_query else orig
+        q = self._vec(Counter(tokenize(q_text)))
         if not q:
             return []
         scored = []
@@ -84,14 +98,14 @@ def init() -> None:
         print(f"[fewshot] indexed {len(_index.examples)} public examples (k={config.FEWSHOT_K})")
 
 
-def examples_block(messages: list[dict]) -> str:
+def examples_block(messages: list[dict], extra_query: str = "") -> str:
     """분류 프롬프트 앞에 붙일 예시 블록. 쓸 예시가 없으면 빈 문자열."""
     if _index is None or config.FEWSHOT_K <= 0:
         return ""
     users = [m.get("content", "") for m in messages if m.get("role") == "user"]
     if not users:
         return ""
-    hits = _index.search(users[-1], config.FEWSHOT_K)
+    hits = _index.search(users[-1], config.FEWSHOT_K, extra_query=extra_query)
     if not hits:
         return ""
     lines = [
@@ -102,6 +116,9 @@ def examples_block(messages: list[dict]) -> str:
         t = e["text"].replace("\n", " ")
         if len(t) > _MAX_CHARS:
             t = t[:_MAX_CHARS] + "…"
-        lines.append(f"- 발화: {t}\n  범주: {e['category']}")
+        cat_line = f"  범주: {e['category']}"
+        if e.get("harm_type"):
+            cat_line += f" (harm_type: {e['harm_type']})"
+        lines.append(f"- 발화: {t}\n{cat_line}")
     lines.append("</참고예시>\n\n")
     return "\n".join(lines)

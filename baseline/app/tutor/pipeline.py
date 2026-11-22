@@ -102,12 +102,13 @@ async def korean_query(text: str, kb: KnowledgeBase | None = None) -> str:
     return " ".join(queries)
 
 
-async def retrieve(messages: list[dict], kb: KnowledgeBase):
-    """BM25 검색. 영어 위주 질문이면 한국어 검색어로 한 번 더 찾아 앞에 합친다."""
+async def retrieve_with_ko(messages: list[dict], kb: KnowledgeBase):
+    """소제목 MaxP 하이브리드 BM25 검색. 영어 위주 질문이면 한국어 검색어로 한 번 더 찾아 앞에 합치고 ko 를 함께 돌려준다."""
     query = build_query(messages)
-    hits = kb.search(query, k=C.TOP_K, k1=1.2, b=0.4, max_qf=3)
+    hits = kb.search_sub_maxp(query, k=C.TOP_K, k1=1.2, b=0.4, max_qf=3)
     users = [m["content"] for m in messages if m.get("role") == "user" and m.get("content")]
     last = users[-1] if users else ""
+    ko = ""
     if C.ENGLISH_QUERY_RATIO > 0 and english_ratio(last) >= C.ENGLISH_QUERY_RATIO:
         try:
             ko = await korean_query(last, kb)
@@ -115,14 +116,19 @@ async def retrieve(messages: list[dict], kb: KnowledgeBase):
             log_error("tutor.query_ko", e)
             ko = ""
         if ko:
-            ko_hits = kb.search(f"{ko} {ko} {query}", k=C.TOP_K, k1=1.2, b=0.4, max_qf=3)
+            ko_hits = kb.search_sub_maxp(f"{ko} {ko} {query}", k=C.TOP_K, k1=1.2, b=0.4, max_qf=3)
             seen = {s.id for s, _ in ko_hits}
             hits = (ko_hits + [(s, sc) for s, sc in hits if s.id not in seen])[: C.TOP_K]
+    return hits, ko
+
+
+async def retrieve(messages: list[dict], kb: KnowledgeBase):
+    hits, _ = await retrieve_with_ko(messages, kb)
     return hits
 
 
 # ---------------------------------------------------------------- 1단계: 분류
-async def classify(messages: list[dict], hits=None, detail: dict | None = None) -> tuple[str, str | None]:
+async def classify(messages: list[dict], hits=None, detail: dict | None = None, extra_query: str = "") -> tuple[str, str | None]:
     if config.LOW_SIGNAL_RULE and focus.is_low_signal(messages):
         if detail is not None:
             detail.update(main="low_signal_input", checks={}, rule="low_signal")
@@ -136,7 +142,7 @@ async def classify(messages: list[dict], hits=None, detail: dict | None = None) 
     else:
         system = prompts.CLASSIFY_SYSTEM
         user = prompts.CLASSIFY_USER.format(conversation=conversation_text(messages))
-    user = fewshot.examples_block(messages) + user
+    user = fewshot.examples_block(messages, extra_query=extra_query) + user
     checks = focus.start_checks(messages, C.FOCUS_NAMES, C.FOCUS_VOTE_NAMES)  # 단서가 있으면 경계 판정을 주 분류와 동시에 시작
     n_votes = max(1, C.CLASSIFY_SAMPLES)
     need = n_votes // 2 + 1
@@ -727,9 +733,9 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
         messages = focus.without_wrappers(messages)
 
     # 검색(BM25, 수 ms)을 먼저 하고 그 자료를 분류에도 넣는다 → 자료에 없는 질문(out_of_material) 판별
-    hits = await retrieve(messages, kb)
+    hits, ko_query = await retrieve_with_ko(messages, kb)
     cls_detail: dict = {}
-    cls_task = asyncio.create_task(classify(messages, hits, cls_detail))
+    cls_task = asyncio.create_task(classify(messages, hits, cls_detail, extra_query=ko_query))
     # 문항의 절반 이상이 answer 이므로, 분류를 기다리는 동안 answer 생성을 미리 시작한다.
     # 분류가 answer 로 나오면 그 결과를 쓰고(지연 = 둘 중 긴 쪽), 아니면 버린다. 답변 내용에는 영향이 없다.
     spec_task = (
@@ -737,7 +743,7 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
     )
     try:
         dbg: dict = {"hits": [s.id for s, _ in hits], "t0": time.perf_counter(), "cls": cls_detail}
-        res = await _decide_and_answer(messages, hits, cls_task, spec_task, dbg)
+        res = await _decide_and_answer(messages, hits, cls_task, spec_task, dbg, extra_query=ko_query)
         if config.EXP_DEBUG:  # 실험 서버 전용 진단 정보 (제출용 서버에서는 꺼져 있다)
             dbg["seconds"] = round(time.perf_counter() - dbg.pop("t0"), 1)
             res["_debug"] = dbg
@@ -747,7 +753,7 @@ async def handle(req: dict, kb: KnowledgeBase) -> dict:
             spec_task.cancel()
 
 
-async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict) -> dict:
+async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict, extra_query: str = "") -> dict:
     try:
         category, harm_type = await cls_task
     except Exception as e:  # 분류 오류는 normal 로 진행
@@ -758,7 +764,7 @@ async def _decide_and_answer(messages, hits, cls_task, spec_task, dbg: dict) -> 
     # out_of_material 로 나왔을 때만 자료 없이 요청 의도만 다시 분류해, 막아야 할 범주면 그쪽을 따른다.
     if category == "out_of_material" and C.OOM_RECHECK:
         try:
-            cat2, harm2 = await classify(messages, None)
+            cat2, harm2 = await classify(messages, None, extra_query=extra_query)
         except Exception as e:
             log_error("tutor.classify2", e)
             cat2, harm2 = "out_of_material", None

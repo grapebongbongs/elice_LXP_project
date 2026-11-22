@@ -36,12 +36,33 @@ def tokenize(text: str) -> list[str]:
     return toks
 
 
+def _split_sub_blocks(text: str) -> list[str]:
+    blocks: list[str] = []
+    cur: list[str] = []
+    for ln in text.splitlines():
+        if re.match(r"^#{2,3}\s+", ln) and cur:
+            blk = "\n".join(cur).strip()
+            if blk:
+                blocks.append(blk)
+            cur = [ln]
+        else:
+            cur.append(ln)
+    if cur:
+        blk = "\n".join(cur).strip()
+        if blk:
+            blocks.append(blk)
+    return blocks or [text]
+
+
 class KnowledgeBase:
     def __init__(self, kb_dir: str):
         self.kb_dir = Path(kb_dir)
         self.sections: dict[str, Section] = {}
         self._df: Counter = Counter()
         self._avgdl = 1.0
+        self._sub_blocks: list[tuple[str, Counter, int]] = []
+        self._sub_df: Counter = Counter()
+        self._sub_avgdl = 1.0
         self._load()
 
     # ---------- 로드 ----------
@@ -66,6 +87,15 @@ class KnowledgeBase:
             self._df.update(s.tokens.keys())
         if self.sections:
             self._avgdl = sum(s.length for s in self.sections.values()) / len(self.sections)
+        for sid in sorted(self.sections.keys()):
+            sec = self.sections[sid]
+            for blk in _split_sub_blocks(sec.text):
+                btoks = tokenize(blk)
+                bc = Counter(btoks)
+                self._sub_blocks.append((sid, bc, len(btoks)))
+                self._sub_df.update(bc.keys())
+        if self._sub_blocks:
+            self._sub_avgdl = sum(b[2] for b in self._sub_blocks) / len(self._sub_blocks)
         print(f"[kb] loaded {len(self.sections)} sections from {self.kb_dir}")
 
     @staticmethod
@@ -107,6 +137,49 @@ class KnowledgeBase:
                 scores.append((s, sc))
         scores.sort(key=lambda x: -x[1])
         return scores[:k]
+
+    def search_sub_maxp(
+        self,
+        query: str,
+        k: int = 5,
+        k1: float = 1.2,
+        b: float = 0.4,
+        max_qf: int | None = 3,
+        doc_weight: float = 0.5,
+    ) -> list[tuple[Section, float]]:
+        q = Counter(tokenize(query))
+        if not q or not self.sections:
+            return []
+        doc_hits = self.search(query, k=len(self.sections), k1=k1, b=b, max_qf=max_qf)
+        doc_map = {s.id: sc for s, sc in doc_hits}
+        sub_map: dict[str, float] = {}
+        sub_n = len(self._sub_blocks)
+        if sub_n:
+            sub_df = self._sub_df
+            sub_avgdl = self._sub_avgdl
+            for sid, toks, dl in self._sub_blocks:
+                sc = 0.0
+                for t, qf in q.items():
+                    f = toks.get(t)
+                    if not f:
+                        continue
+                    qf_eff = min(qf, max_qf) if max_qf else qf
+                    idf = math.log(1 + (sub_n - sub_df[t] + 0.5) / (sub_df[t] + 0.5))
+                    sc += qf_eff * idf * f * (k1 + 1) / (f + k1 * (1 - b + b * dl / sub_avgdl))
+                if sc > sub_map.get(sid, 0.0):
+                    sub_map[sid] = sc
+        max_doc = max(doc_map.values(), default=0.0)
+        max_sub = max(sub_map.values(), default=0.0)
+        all_sids = set(doc_map.keys()) | set(sub_map.keys())
+        if not all_sids:
+            return []
+        scored: list[tuple[str, float]] = []
+        for sid in all_sids:
+            dn = (doc_map.get(sid, 0.0) / max_doc) if max_doc > 0 else 0.0
+            sn = (sub_map.get(sid, 0.0) / max_sub) if max_sub > 0 else 0.0
+            scored.append((sid, doc_weight * dn + (1.0 - doc_weight) * sn))
+        scored.sort(key=lambda x: (-x[1], x[0]))
+        return [(self.sections[sid], sc) for sid, sc in scored[:k]]
 
     def has(self, sid: str) -> bool:
         return sid in self.sections
