@@ -146,6 +146,7 @@ class KnowledgeBase:
         b: float = 0.4,
         max_qf: int | None = 3,
         doc_weight: float = 0.5,
+        sub_b: float = 0.2,
     ) -> list[tuple[Section, float]]:
         q = Counter(tokenize(query))
         if not q or not self.sections:
@@ -165,7 +166,7 @@ class KnowledgeBase:
                         continue
                     qf_eff = min(qf, max_qf) if max_qf else qf
                     idf = math.log(1 + (sub_n - sub_df[t] + 0.5) / (sub_df[t] + 0.5))
-                    sc += qf_eff * idf * f * (k1 + 1) / (f + k1 * (1 - b + b * dl / sub_avgdl))
+                    sc += qf_eff * idf * f * (k1 + 1) / (f + k1 * (1 - sub_b + sub_b * dl / sub_avgdl))
                 if sc > sub_map.get(sid, 0.0):
                     sub_map[sid] = sc
         max_doc = max(doc_map.values(), default=0.0)

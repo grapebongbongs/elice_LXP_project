@@ -61,10 +61,10 @@ def build_query(messages: list[dict]) -> str:
     last = real[-1]
     if not C.QUERY_ASSISTANT:
         prev = " ".join(real[-4:-1])
-        return f"{last} {last} {prev}".strip()
+        return f"{last} {prev}".strip()
     prev = " ".join(real[:-1])
     asst = " ".join(m["content"] for m in messages if m.get("role") == "assistant" and m.get("content"))
-    return f"{last} {last} {prev} {asst}".strip()
+    return f"{last} {prev} {asst}".strip()
 
 
 def english_ratio(text: str) -> float:
